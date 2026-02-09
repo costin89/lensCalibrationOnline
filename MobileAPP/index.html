@@ -3,16 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Camera + IMU Logger (IndexedDB)</title>
+  <title>Camera + Orientation Capture</title>
 
-  <!-- JSZip (für ZIP Export) -->
+  <!-- ZIP Library (JSZip) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
   <style>
     :root{
-      --bg:#0b0c10; --card:#12141c; --muted:#a9b0c3; --text:#eef1ff;
-      --accent:#7c5cff; --danger:#ff4d6d;
+      --bg:#0b0c10;
+      --card:#12141c;
+      --muted:#a9b0c3;
+      --text:#eef1ff;
+      --accent:#7c5cff;
+      --danger:#ff4d6d;
       --radius:18px;
+      --border: rgba(255,255,255,.10);
+      --glass: rgba(0,0,0,.35);
     }
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
     body{margin:0;background:linear-gradient(180deg,#07080c, #0b0c10);color:var(--text);}
@@ -21,9 +27,13 @@
       padding:14px 14px 10px 14px;
       display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
     }
-    .left, .right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-    .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);
-      padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px}
+    .leftHead{display:flex;flex-direction:column;gap:6px}
+    .title{font-weight:800;letter-spacing:.2px;font-size:14px;color:#dfe3ff;opacity:.95}
+    .pill{
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.10);
+      padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px
+    }
     .btn{
       border:0;border-radius:999px;padding:10px 12px;font-weight:750;
       background:rgba(255,255,255,.08);color:var(--text);
@@ -32,120 +42,139 @@
     }
     .btn.primary{background:var(--accent);border-color:transparent;}
     .btn.danger{background:rgba(255,77,109,.14);border-color:rgba(255,77,109,.35);color:#ffd6de;}
-    .btn.icon{width:42px;height:42px;border-radius:999px;display:grid;place-items:center;padding:0;font-size:18px}
     .btn:disabled{opacity:.45;cursor:not-allowed;}
-    .stage{padding:10px 14px;flex:1;display:flex;flex-direction:column;gap:12px;}
 
+    .stage{padding:0 14px 14px 14px;flex:1;display:flex;flex-direction:column;gap:12px;}
     .viewfinder{
-      position:relative;flex:1;min-height:420px;background:var(--card);
-      border:1px solid rgba(255,255,255,.10);
+      position:relative;
+      flex:1;
+      min-height:420px;
+      background:var(--card);
+      border:1px solid var(--border);
       border-radius:var(--radius);
       overflow:hidden;
-      box-shadow:0 18px 60px rgba(0,0,0,.35);
+      box-shadow:0 20px 60px rgba(0,0,0,.35);
     }
-    video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1);}
-    .back video{transform:none;}
+    video{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+      transform:scaleX(-1);
+    }
+    .back video{transform:none;} /* back camera: no mirror */
 
-    .overlay{
-      position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:space-between;
-      padding:10px;pointer-events:none;gap:10px;
+    .hudTop{
+      position:absolute;left:10px;top:10px;right:10px;
+      display:flex;justify-content:space-between;gap:10px;
+      pointer-events:none;
     }
-    .hud{display:flex;flex-direction:column;gap:6px;min-width:165px}
-    .hud.right{align-items:flex-end;min-width:auto}
-    .hud .pill{backdrop-filter:blur(10px);background:rgba(0,0,0,.35);
-      border-color:rgba(255,255,255,.14);color:#d6dbf0}
+    .hudCol{display:flex;flex-direction:column;gap:6px;min-width:180px}
+    .hudCol.right{align-items:flex-end;min-width:auto}
+    .hudCol .pill{
+      backdrop-filter:blur(10px);
+      background:var(--glass);
+      border-color:rgba(255,255,255,.14);
+      color:#d6dbf0;
+    }
 
     .portraitBlock{
-      position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;
+      position:absolute;inset:0;
+      display:none;align-items:center;justify-content:center;text-align:center;
       padding:22px;background:rgba(0,0,0,.72);backdrop-filter:blur(10px);
     }
     .portraitBlock.show{display:flex;}
     .portraitBlock .card{
-      background:rgba(18,20,28,.85);border:1px solid rgba(255,255,255,.14);
-      border-radius:22px;padding:18px;max-width:360px;
+      background:rgba(18,20,28,.85);
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:22px;padding:18px;max-width:340px;
     }
     .portraitBlock h2{margin:0 0 8px 0;font-size:18px;}
     .portraitBlock p{margin:0;color:var(--muted);font-size:13px;line-height:1.35}
 
-    .bottomBar{
-      display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
-      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
-      border-radius:22px;padding:10px 12px;
+    .panel{
+      background:rgba(255,255,255,.04);
+      border:1px solid var(--border);
+      border-radius:22px;
+      padding:12px;
+      display:flex;flex-direction:column;gap:10px;
     }
-    .thumb{width:64px;height:64px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14);
-      background:rgba(255,255,255,.06);}
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
+
+    .thumb{
+      width:64px;height:64px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+      flex:0 0 auto;
+    }
     .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
-    .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px}
-    .chips{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+
+    details{
+      background:rgba(255,255,255,.03);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:18px;
+      padding:10px 12px;
+    }
+    summary{
+      cursor:pointer;
+      color:#dfe3ff;
+      font-weight:750;
+      font-size:12px;
+      list-style:none;
+    }
+    summary::-webkit-details-marker{display:none;}
+    .detailsBody{margin-top:10px;display:flex;flex-direction:column;gap:10px}
+
+    select{
+      width:100%;
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:12px;
+      padding:10px;
+    }
+
+    .zoomRow{display:flex;gap:8px;flex-wrap:wrap;}
     .chip{
-      border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);
-      color:var(--text);padding:8px 10px;border-radius:999px;cursor:pointer;font-weight:750;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+      padding:8px 10px;border-radius:999px;
+      cursor:pointer;font-weight:800;
+      font-size:12px;
     }
     .chip.active{background:rgba(124,92,255,.22);border-color:rgba(124,92,255,.65);}
 
     footer{padding:10px 14px 16px 14px;color:var(--muted);font-size:12px;line-height:1.35}
-
-    /* Drawer */
-    .scrim{
-      position:fixed;inset:0;background:rgba(0,0,0,.55);
-      opacity:0;pointer-events:none;transition:.18s ease;
-    }
-    .scrim.show{opacity:1;pointer-events:auto;}
-    .drawer{
-      position:fixed;left:0;right:0;bottom:0;
-      background:rgba(18,20,28,.96);backdrop-filter:blur(12px);
-      border-top:1px solid rgba(255,255,255,.14);
-      border-radius:22px 22px 0 0;
-      transform:translateY(105%);transition:.22s ease;
-      padding:14px;
-      max-height:78dvh;overflow:auto;
-    }
-    .drawer.show{transform:translateY(0);}
-    .drawer h3{margin:0 0 10px 0;font-size:14px;color:#dfe4ff;}
-    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:10px 0;}
-    .divider{height:1px;background:rgba(255,255,255,.10);margin:12px 0;}
-    select{
-      background:rgba(255,255,255,.06);color:var(--text);
-      border:1px solid rgba(255,255,255,.14);
-      border-radius:12px;padding:10px;min-width:240px;max-width:100%;
-    }
-    .toggle{
-      display:flex;align-items:flex-start;gap:10px;
-      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
-      padding:10px 12px;border-radius:16px;width:100%;
-      color:var(--muted);font-size:12px;
-    }
-    .toggle input{transform:scale(1.15);margin-top:2px;}
-    .small{font-size:12px;color:var(--muted);line-height:1.35;}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
   </style>
 </head>
 
 <body>
 <div class="wrap">
   <header>
-    <div class="left">
+    <div class="leftHead">
+      <div class="title">Camera Capture + Orientation</div>
       <div class="pill" id="statusPill">Bereit</div>
-      <div class="pill" id="pillCount">0 records</div>
     </div>
-    <div class="right">
+
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn" id="btnFullscreen">Fullscreen</button>
       <button class="btn primary" id="btnStart">Start</button>
-      <button class="btn primary" id="btnShot" disabled>Shot</button>
-      <button class="btn icon" id="btnMenu" aria-label="Menü">⋯</button>
+      <button class="btn danger" id="btnStop" disabled>Stop</button>
     </div>
   </header>
 
   <div class="stage">
     <div class="viewfinder back" id="viewfinder">
-      <div class="overlay">
-        <div class="hud">
+      <div class="hudTop">
+        <div class="hudCol">
           <div class="pill" id="pillOrientation">Portrait: ?</div>
           <div class="pill" id="pillHeading">Heading: —</div>
-          <div class="pill" id="pillYaw">Yaw: —</div>
-          <div class="pill" id="pillPitch">Pitch: —</div>
-          <div class="pill" id="pillRoll">Roll: —</div>
+          <div class="pill" id="pillEuler">Yaw/Pitch/Roll: — / — / —</div>
         </div>
-        <div class="hud right">
+        <div class="hudCol right">
           <div class="pill" id="pillZoom">Zoom: —</div>
+          <div class="pill" id="pillCount">Records: 0</div>
         </div>
       </div>
 
@@ -159,144 +188,114 @@
       </div>
     </div>
 
-    <div class="bottomBar">
-      <div class="thumb" title="Letztes Foto"><img id="thumb" alt=""></div>
-      <div class="meta">
-        <span id="metaCam">Cam: —</span>
-        <span id="metaId">Last: —</span>
-      </div>
-      <div class="chips" id="zoomRow" aria-label="Zoom">
-        <button class="chip" data-z="0.5">0,5x</button>
-        <button class="chip active" data-z="1">1x</button>
-        <button class="chip" data-z="2">2x</button>
-        <button class="chip" data-z="5">5x</button>
-      </div>
-    </div>
+    <div class="panel">
+      <div class="row">
+        <button class="btn primary" id="btnShot" disabled>Foto aufnehmen</button>
+        <div class="thumb" title="Letztes Foto">
+          <img id="thumb" alt="" />
+        </div>
 
-    <div class="pill" id="hint">
-      Tipp: iOS braucht HTTPS. Motion/Kompass aktivierst du im Menü (⋯). Zoom ist “best effort”.
+        <button class="btn" id="btnExportZip" disabled>ZIP export</button>
+        <button class="btn danger" id="btnClear" disabled>Session löschen</button>
+      </div>
+
+      <details>
+        <summary>Optionen</summary>
+        <div class="detailsBody">
+          <div class="row" style="width:100%;gap:12px;align-items:flex-start;">
+            <div style="flex:1;min-width:220px;">
+              <div class="pill" style="display:inline-block;margin-bottom:8px;">Kamera wählen</div>
+              <select id="cameraSelect" disabled></select>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button class="btn" id="btnFlip" disabled>Front/Back</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="pill" style="display:inline-block;margin-bottom:8px;">Zoom (best effort)</div>
+            <div class="zoomRow" id="zoomRow">
+              <button class="chip" data-z="0.5">0,5x</button>
+              <button class="chip active" data-z="1">1x</button>
+              <button class="chip" data-z="2">2x</button>
+              <button class="chip" data-z="5">5x</button>
+            </div>
+            <div class="pill" id="hint" style="margin-top:10px;">
+              Hinweis: iOS Safari kann Zoom/Linsenwechsel im Web einschränken. ZIP enthält Fotos nur, solange die Seite nicht neu geladen wurde.
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 
   <footer>
-    IndexedDB speichert Fotos als JPEG-Blob + Metadaten. ZIP Export funktioniert auch nach Reload.
+    iOS: Kamera + Motion/Kompass funktionieren am zuverlässigsten über <b>HTTPS</b>.  
+    Start-Button startet Kamera <i>und</i> fragt Motion/Orientation-Permissions an (User-Gesture).  
+    ZIP enthält <code>captures.json</code> + Fotos (RAM).
   </footer>
-</div>
-
-<!-- Drawer -->
-<div class="scrim" id="scrim"></div>
-<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Menü">
-  <div class="row" style="margin-top:0">
-    <h3 style="margin:0">Menü</h3>
-    <button class="btn" id="btnClose">Schließen</button>
-  </div>
-
-  <div class="row">
-    <button class="btn" id="btnMotion">Gyro/Kompass aktivieren</button>
-    <button class="btn" id="btnFullscreen">Fullscreen</button>
-  </div>
-
-  <div class="row">
-    <button class="btn" id="btnFlip" disabled>Front/Back</button>
-    <button class="btn danger" id="btnStop" disabled>Stop</button>
-  </div>
-
-  <div class="divider"></div>
-
-  <h3>Kamera</h3>
-  <div class="row">
-    <label class="small">Kamera auswählen:</label>
-    <select id="cameraSelect" disabled></select>
-  </div>
-
-  <div class="divider"></div>
-
-  <h3>Export</h3>
-  <label class="toggle" title="Nur beim Export wird zusätzlich eine JSON-Datei mit Base64 Bildern erstellt. Kann sehr groß werden.">
-    <input type="checkbox" id="chkBase64Export" />
-    <div>
-      <div style="color:var(--text);font-weight:750">Beim Export auch Base64-JSON erzeugen</div>
-      <div style="margin-top:2px">Erstellt <code>captures_with_base64.json</code> zusätzlich (riesig möglich).</div>
-    </div>
-  </label>
-
-  <div class="row">
-    <button class="btn" id="btnExportJson" disabled>JSON export</button>
-    <button class="btn" id="btnExportZip" disabled>ZIP export</button>
-    <button class="btn danger" id="btnClear" disabled>DB löschen</button>
-  </div>
-
-  <div class="small">
-    <b>ZIP enthält:</b> <code>captures.json</code> + Ordner <code>photos/</code> mit Bildern.
-  </div>
 </div>
 
 <script>
 (() => {
-  // -------------------------
-  // Elements
-  // -------------------------
   const els = {
     video: document.getElementById('video'),
     viewfinder: document.getElementById('viewfinder'),
     portraitBlock: document.getElementById('portraitBlock'),
 
     statusPill: document.getElementById('statusPill'),
-    pillCount: document.getElementById('pillCount'),
-
     pillOrientation: document.getElementById('pillOrientation'),
     pillHeading: document.getElementById('pillHeading'),
-    pillYaw: document.getElementById('pillYaw'),
-    pillPitch: document.getElementById('pillPitch'),
-    pillRoll: document.getElementById('pillRoll'),
+    pillEuler: document.getElementById('pillEuler'),
     pillZoom: document.getElementById('pillZoom'),
-
-    hint: document.getElementById('hint'),
-    thumb: document.getElementById('thumb'),
-    metaCam: document.getElementById('metaCam'),
-    metaId: document.getElementById('metaId'),
+    pillCount: document.getElementById('pillCount'),
 
     btnStart: document.getElementById('btnStart'),
-    btnShot: document.getElementById('btnShot'),
-    btnMenu: document.getElementById('btnMenu'),
-
-    scrim: document.getElementById('scrim'),
-    drawer: document.getElementById('drawer'),
-    btnClose: document.getElementById('btnClose'),
-
-    btnMotion: document.getElementById('btnMotion'),
-    btnFullscreen: document.getElementById('btnFullscreen'),
-    btnFlip: document.getElementById('btnFlip'),
     btnStop: document.getElementById('btnStop'),
-
-    cameraSelect: document.getElementById('cameraSelect'),
-    zoomRow: document.getElementById('zoomRow'),
-
-    chkBase64Export: document.getElementById('chkBase64Export'),
-    btnExportJson: document.getElementById('btnExportJson'),
+    btnShot: document.getElementById('btnShot'),
     btnExportZip: document.getElementById('btnExportZip'),
     btnClear: document.getElementById('btnClear'),
+
+    btnFlip: document.getElementById('btnFlip'),
+    cameraSelect: document.getElementById('cameraSelect'),
+    zoomRow: document.getElementById('zoomRow'),
+    hint: document.getElementById('hint'),
+
+    btnFullscreen: document.getElementById('btnFullscreen'),
+    thumb: document.getElementById('thumb'),
   };
 
   // -------------------------
-  // Helpers
+  // Storage: only metadata
   // -------------------------
-  function setStatus(t){ els.statusPill.textContent = t; }
+  const STORE_KEY = "captures_v1"; // metadata only
 
-  function isPortrait(){
-    return window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
+  function loadCaptures(){
+    try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || "[]"); }
+    catch { return []; }
   }
-  function updatePortraitUI(){
-    const ok = isPortrait();
-    els.pillOrientation.textContent = "Portrait: " + (ok ? "Ja" : "Nein");
-    els.portraitBlock.classList.toggle('show', !ok);
-    els.btnShot.disabled = !ok || !stream;
+
+  function saveCaptures(arr){
+    sessionStorage.setItem(STORE_KEY, JSON.stringify(arr));
+    els.btnExportZip.disabled = arr.length === 0;
+    els.btnClear.disabled = arr.length === 0;
+    els.pillCount.textContent = `Records: ${arr.length}`;
   }
-  window.addEventListener('orientationchange', updatePortraitUI);
-  window.addEventListener('resize', updatePortraitUI);
+
+  function nextId(arr){
+    const max = arr.reduce((m, x) => Math.max(m, Number(x.id)||0), 0);
+    return max + 1;
+  }
 
   function padId(id){ return String(id).padStart(4, "0"); }
-  function photoFileName(id){ return `photo_${padId(id)}.jpg`; }
+
+  function setStatus(t){ els.statusPill.textContent = t; }
+
+  // -------------------------
+  // In-memory photo store (no base64 persistence, no indexeddb)
+  // -------------------------
+  // Store photos as Blobs in RAM for ZIP export
+  const photoBlobs = new Map(); // id -> { filename, blob }
 
   function downloadBlob(filename, blob){
     const url = URL.createObjectURL(blob);
@@ -306,171 +305,112 @@
     a.click();
     URL.revokeObjectURL(url);
   }
-  function downloadJson(filename, obj){
-    downloadBlob(filename, new Blob([JSON.stringify(obj, null, 2)], {type:"application/json"}));
-  }
-  function blobToBase64(blob){
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => {
-        // data:...;base64,XXXX
-        const s = String(r.result || "");
-        const idx = s.indexOf("base64,");
-        resolve(idx >= 0 ? s.slice(idx + 7) : "");
-      };
-      r.onerror = reject;
-      r.readAsDataURL(blob);
-    });
-  }
 
   // -------------------------
-  // Drawer UI
+  // Orientation/Motion
   // -------------------------
-  function openDrawer(){
-    els.scrim.classList.add('show');
-    els.drawer.classList.add('show');
-  }
-  function closeDrawer(){
-    els.scrim.classList.remove('show');
-    els.drawer.classList.remove('show');
-  }
-  els.btnMenu.addEventListener('click', openDrawer);
-  els.btnClose.addEventListener('click', closeDrawer);
-  els.scrim.addEventListener('click', closeDrawer);
+  let motionActive = false;
+  let latest = { heading:null, yaw:null, pitch:null, roll:null, ts:null };
 
-  // -------------------------
-  // IndexedDB
-  // DB: camlog_v1
-  // stores:
-  //   - captures: { id (auto), ts, heading, yaw, pitch, roll }
-  //   - photos:   { id (same), mime, blob }
-  // -------------------------
-  const DB_NAME = "camlog_v1";
-  const DB_VERSION = 1;
-  let db = null;
-
-  function openDB(){
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const d = req.result;
-        const captures = d.createObjectStore("captures", { keyPath: "id", autoIncrement: true });
-        captures.createIndex("ts", "ts");
-        d.createObjectStore("photos", { keyPath: "id" });
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  function tx(storeNames, mode="readonly"){
-    const t = db.transaction(storeNames, mode);
-    return t;
-  }
-
-  function idbGet(store, key){
-    return new Promise((resolve, reject) => {
-      const r = store.get(key);
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  function idbPut(store, value){
-    return new Promise((resolve, reject) => {
-      const r = store.put(value);
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  function idbAdd(store, value){
-    return new Promise((resolve, reject) => {
-      const r = store.add(value);
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  function idbClear(store){
-    return new Promise((resolve, reject) => {
-      const r = store.clear();
-      r.onsuccess = () => resolve(true);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  function idbGetAll(store){
-    return new Promise((resolve, reject) => {
-      const r = store.getAll();
-      r.onsuccess = () => resolve(r.result || []);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  async function dbCount(){
-    const t = tx(["captures"], "readonly");
-    const store = t.objectStore("captures");
-    return new Promise((resolve, reject) => {
-      const r = store.count();
-      r.onsuccess = () => resolve(r.result || 0);
-      r.onerror = () => reject(r.error);
-    });
-  }
-
-  async function refreshCount(){
-    const n = await dbCount();
-    els.pillCount.textContent = `${n} records`;
-    els.btnExportJson.disabled = (n === 0);
-    els.btnExportZip.disabled = (n === 0);
-    els.btnClear.disabled = (n === 0);
-  }
-
-  async function getLastCapture(){
-    // simplest: getAll and pick last (fine for small/medium). For huge logs, use cursor.
-    const t = tx(["captures"], "readonly");
-    const store = t.objectStore("captures");
-    const all = await idbGetAll(store);
-    if (!all.length) return null;
-    // autoIncrement id -> highest id is last
-    all.sort((a,b)=>a.id-b.id);
-    return all[all.length - 1];
-  }
-
-  async function updateLastUI(){
-    const last = await getLastCapture();
-    if (!last){
-      els.metaId.textContent = "Last: —";
-      els.thumb.removeAttribute("src");
-      return;
-    }
-    els.metaId.textContent = `Last: #${last.id}`;
-    const t = tx(["photos"], "readonly");
-    const p = await idbGet(t.objectStore("photos"), last.id);
-    if (p?.blob){
-      const url = URL.createObjectURL(p.blob);
-      els.thumb.src = url;
-      // avoid leaking too many object URLs: revoke after image loads
-      els.thumb.onload = () => URL.revokeObjectURL(url);
+  function updateSensorUI(){
+    const h = latest.heading;
+    const y = latest.yaw, p = latest.pitch, r = latest.roll;
+    els.pillHeading.textContent = (h == null) ? "Heading: —" : `Heading: ${h.toFixed(0)}°`;
+    if (y == null || p == null || r == null){
+      els.pillEuler.textContent = "Yaw/Pitch/Roll: — / — / —";
+    } else {
+      els.pillEuler.textContent = `Yaw/Pitch/Roll: ${y.toFixed(0)}° / ${p.toFixed(0)}° / ${r.toFixed(0)}°`;
     }
   }
+
+  function startOrientationListeners(){
+    if (motionActive) return;
+    motionActive = true;
+
+    window.addEventListener('deviceorientation', (ev) => {
+      // Heading: iOS Safari non-standard
+      const heading = (typeof ev.webkitCompassHeading === 'number')
+        ? ev.webkitCompassHeading
+        : (typeof ev.alpha === 'number' ? ev.alpha : null);
+
+      // Pragmatic Euler-ish mapping:
+      // yaw ~ alpha, pitch ~ beta, roll ~ gamma
+      const yaw   = (typeof ev.alpha === 'number') ? ev.alpha : null;
+      const pitch = (typeof ev.beta  === 'number') ? ev.beta  : null;
+      const roll  = (typeof ev.gamma === 'number') ? ev.gamma : null;
+
+      latest = { heading, yaw, pitch, roll, ts: Date.now() };
+      updateSensorUI();
+    }, { passive:true });
+  }
+
+  async function requestMotionPermissionAndStart(){
+    // Must be called from user gesture on iOS
+    let ok = true;
+
+    try{
+      if (typeof DeviceOrientationEvent !== 'undefined'
+          && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const res = await DeviceOrientationEvent.requestPermission();
+        ok = (res === 'granted');
+      }
+    } catch(e){
+      ok = false;
+    }
+
+    try{
+      if (ok && typeof DeviceMotionEvent !== 'undefined'
+          && typeof DeviceMotionEvent.requestPermission === 'function') {
+        const res2 = await DeviceMotionEvent.requestPermission();
+        ok = ok && (res2 === 'granted');
+      }
+    } catch(e){
+      ok = false;
+    }
+
+    if (!ok){
+      setStatus("Motion/Kompass: abgelehnt");
+      return false;
+    }
+
+    startOrientationListeners();
+    setStatus("Motion/Kompass aktiv");
+    return true;
+  }
+
+  // -------------------------
+  // Portrait gate
+  // -------------------------
+  function isPortrait(){
+    return window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
+  }
+
+  function updatePortraitUI(){
+    const ok = isPortrait();
+    els.pillOrientation.textContent = "Portrait: " + (ok ? "Ja" : "Nein");
+    els.portraitBlock.classList.toggle('show', !ok);
+    els.btnShot.disabled = !ok || !stream;
+  }
+
+  window.addEventListener('orientationchange', updatePortraitUI);
+  window.addEventListener('resize', updatePortraitUI);
 
   // -------------------------
   // Camera
   // -------------------------
   let stream = null;
+  let videoTrack = null;
   let currentDeviceId = null;
   let facing = "environment";
-  let videoTrack = null;
 
   async function refreshDeviceList(){
     if (!navigator.mediaDevices?.enumerateDevices) return;
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const cams = devices.filter(d => d.kind === "videoinput");
+    const cams = devices.filter(d => d.kind === 'videoinput');
 
     els.cameraSelect.innerHTML = "";
     cams.forEach((c, idx) => {
-      const opt = document.createElement("option");
+      const opt = document.createElement('option');
       opt.value = c.deviceId;
       opt.textContent = c.label ? c.label : `Kamera ${idx+1}`;
       if (currentDeviceId && c.deviceId === currentDeviceId) opt.selected = true;
@@ -478,7 +418,6 @@
     });
 
     els.cameraSelect.disabled = cams.length === 0;
-    els.metaCam.textContent = `Cam: ${els.cameraSelect.selectedOptions[0]?.textContent || "—"}`;
   }
 
   function updateZoomUIFromCapabilities(){
@@ -487,66 +426,63 @@
       return;
     }
     const caps = videoTrack.getCapabilities();
-    if (caps && "zoom" in caps){
-      els.pillZoom.textContent = `Zoom: ${caps.zoom.min}–${caps.zoom.max}`;
+    if (caps && 'zoom' in caps){
+      els.pillZoom.textContent = `Zoom: supported (${caps.zoom.min}–${caps.zoom.max})`;
     } else {
-      els.pillZoom.textContent = "Zoom: —";
+      els.pillZoom.textContent = "Zoom: nicht exposed";
     }
   }
 
   async function trySetZoom(z){
     if (!videoTrack?.getCapabilities || !videoTrack?.applyConstraints) return false;
     const caps = videoTrack.getCapabilities();
-    if (!caps || !("zoom" in caps)) return false;
+    if (!caps || !('zoom' in caps)) return false;
+
     const target = Math.min(caps.zoom.max, Math.max(caps.zoom.min, z));
     try{
       await videoTrack.applyConstraints({ advanced: [{ zoom: target }] });
+      els.pillZoom.textContent = `Zoom: ${target.toFixed(2)}`;
       return true;
-    } catch {
+    } catch(e){
       return false;
     }
   }
 
   async function startCamera({ deviceId=null, facingMode="environment" } = {}){
     stopCamera();
+
     const constraints = {
-      audio:false,
-      video:{
-        width:{ideal:1280},
-        height:{ideal:720},
-        facingMode: deviceId ? undefined : {ideal:facingMode},
-        deviceId:  deviceId ? {exact:deviceId} : undefined
+      audio: false,
+      video: {
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: deviceId ? undefined : { ideal: facingMode },
+        deviceId:  deviceId ? { exact: deviceId } : undefined
       }
     };
 
-    try{
-      setStatus("Kamera-Permission…");
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-      els.video.srcObject = stream;
-      await new Promise(res => els.video.onloadedmetadata = res);
-      await els.video.play();
+    setStatus("Kamera-Permission…");
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    els.video.srcObject = stream;
 
-      videoTrack = stream.getVideoTracks()[0];
-      const settings = videoTrack.getSettings?.() || {};
-      currentDeviceId = settings.deviceId || deviceId || null;
+    await new Promise(res => els.video.onloadedmetadata = res);
+    await els.video.play();
 
-      if (facingMode === "user") els.viewfinder.classList.remove("back");
-      else els.viewfinder.classList.add("back");
+    videoTrack = stream.getVideoTracks()[0];
+    const settings = videoTrack.getSettings?.() || {};
+    currentDeviceId = settings.deviceId || deviceId || null;
 
-      setStatus("Kamera läuft");
-      els.btnStop.disabled = false;
-      els.btnFlip.disabled = false;
+    if (facingMode === "user") els.viewfinder.classList.remove('back');
+    else els.viewfinder.classList.add('back');
 
-      await refreshDeviceList();
-      updateZoomUIFromCapabilities();
-      updatePortraitUI();
+    els.btnStop.disabled = false;
+    els.btnFlip.disabled = false;
 
-    } catch(err){
-      console.error(err);
-      setStatus("Fehler: " + (err.name || "getUserMedia"));
-      els.hint.textContent = "Tipp: iOS braucht HTTPS. Kamera-Permission in Safari erlauben.";
-      stopCamera();
-    }
+    await refreshDeviceList();
+    updateZoomUIFromCapabilities();
+    updatePortraitUI();
+
+    setStatus("Kamera läuft");
   }
 
   function stopCamera(){
@@ -555,9 +491,12 @@
     videoTrack = null;
     currentDeviceId = null;
     els.video.srcObject = null;
-    els.btnShot.disabled = true;
+
     els.btnStop.disabled = true;
     els.btnFlip.disabled = true;
+    els.cameraSelect.disabled = true;
+    els.btnShot.disabled = true;
+
     setStatus("Gestoppt");
     updatePortraitUI();
   }
@@ -574,67 +513,105 @@
     await startCamera({ deviceId, facingMode: facing });
   }
 
-  async function captureToBlob(){
+  async function capturePhoto(){
+    if (!stream || !isPortrait()) return;
+
+    const captures = loadCaptures();
+    const id = nextId(captures);
+    const filename = `photo_${padId(id)}.jpg`;
+
     const v = els.video;
-    const canvas = document.createElement("canvas");
+    const canvas = document.createElement('canvas');
     canvas.width = v.videoWidth;
     canvas.height = v.videoHeight;
-    const ctx = canvas.getContext("2d");
+
+    const ctx = canvas.getContext('2d');
     ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-    return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
-  }
 
-  // -------------------------
-  // Sensor (Heading + Euler-ish)
-  // -------------------------
-  let latest = { heading:null, yaw:null, pitch:null, roll:null, ts:null };
-
-  async function requestMotionPermission(){
-    let ok = false;
-
-    try{
-      if (typeof DeviceOrientationEvent !== "undefined" &&
-          typeof DeviceOrientationEvent.requestPermission === "function") {
-        const res = await DeviceOrientationEvent.requestPermission();
-        ok = (res === "granted");
-      } else ok = true;
-    } catch(e){ console.warn(e); }
-
-    try{
-      if (typeof DeviceMotionEvent !== "undefined" &&
-          typeof DeviceMotionEvent.requestPermission === "function") {
-        const res2 = await DeviceMotionEvent.requestPermission();
-        ok = ok && (res2 === "granted");
-      }
-    } catch(e){ console.warn(e); }
-
-    if (!ok){
-      setStatus("Motion/Kompass abgelehnt");
+    // Create Blob (better for ZIP) + also preview thumbnail + optional direct download
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (!blob){
+      setStatus("Foto Fehler");
       return;
     }
 
-    setStatus("Motion/Kompass aktiv");
+    // keep in RAM for ZIP
+    photoBlobs.set(id, { filename, blob });
 
-    window.addEventListener("deviceorientation", (ev) => {
-      const heading = (typeof ev.webkitCompassHeading === "number")
-        ? ev.webkitCompassHeading
-        : (typeof ev.alpha === "number" ? ev.alpha : null);
+    // thumbnail preview
+    const url = URL.createObjectURL(blob);
+    els.thumb.src = url;
+    // release old object URLs later to avoid leaks
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
 
-      const yaw   = (typeof ev.alpha === "number") ? ev.alpha : null;
-      const pitch = (typeof ev.beta  === "number") ? ev.beta  : null;
-      const roll  = (typeof ev.gamma === "number") ? ev.gamma : null;
+    // OPTIONAL: direct download of each photo file (uncomment if you want)
+    // downloadBlob(filename, blob);
 
-      latest = { heading, yaw, pitch, roll, ts: Date.now() };
+    // metadata record in sessionStorage
+    const rec = {
+      id,
+      ts: new Date().toISOString(),
+      heading: latest.heading,
+      yaw: latest.yaw,
+      pitch: latest.pitch,
+      roll: latest.roll
+    };
+    captures.push(rec);
+    saveCaptures(captures);
 
-      els.pillHeading.textContent = (heading == null) ? "Heading: —" : `Heading: ${heading.toFixed(0)}°`;
-      els.pillYaw.textContent     = (yaw == null)     ? "Yaw: —"     : `Yaw: ${yaw.toFixed(0)}°`;
-      els.pillPitch.textContent   = (pitch == null)   ? "Pitch: —"   : `Pitch: ${pitch.toFixed(0)}°`;
-      els.pillRoll.textContent    = (roll == null)    ? "Roll: —"    : `Roll: ${roll.toFixed(0)}°`;
-    }, { passive:true });
+    setStatus(`Gespeichert #${id}`);
   }
 
   // -------------------------
-  // Fullscreen
+  // ZIP export (captures.json + photos/*.jpg)
+  // -------------------------
+  async function exportZip(){
+    const captures = loadCaptures();
+    if (!captures.length) return;
+
+    if (typeof JSZip === "undefined"){
+      setStatus("ZIP: JSZip fehlt");
+      return;
+    }
+
+    setStatus("ZIP wird erstellt…");
+
+    try{
+      const zip = new JSZip();
+      zip.file("captures.json", JSON.stringify(captures, null, 2));
+
+      const photos = zip.folder("photos");
+      const missing = [];
+
+      for (const rec of captures){
+        const id = rec.id;
+        const entry = photoBlobs.get(id);
+        if (!entry){
+          missing.push(`#${id}`);
+          continue;
+        }
+        photos.file(entry.filename, entry.blob); // Blob directly
+      }
+
+      if (missing.length){
+        zip.file("missing_photos.txt",
+          "Diese Records haben kein Foto im RAM.\n" +
+          "Grund: Seite neu geladen oder Foto nicht in dieser Session aufgenommen.\n\n" +
+          missing.join("\n")
+        );
+      }
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      downloadBlob("capture_export.zip", blob);
+      setStatus("ZIP exportiert");
+    } catch(e){
+      console.error(e);
+      setStatus("ZIP Fehler");
+    }
+  }
+
+  // -------------------------
+  // Fullscreen toggle
   // -------------------------
   function isFullscreen(){
     return !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -646,227 +623,82 @@
     const el = document.documentElement;
     if (el.requestFullscreen) return el.requestFullscreen();
     if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
-    throw new Error("Fullscreen API not supported");
+    throw new Error("Fullscreen not supported");
   }
   async function exitFullscreen(){
     if (document.exitFullscreen) return document.exitFullscreen();
     if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
     throw new Error("Exit fullscreen not supported");
   }
-  els.btnFullscreen.addEventListener("click", async () => {
+
+  els.btnFullscreen.addEventListener('click', async () => {
     try{
       if (!isFullscreen()) await enterFullscreen();
       else await exitFullscreen();
     } catch(e){
-      console.warn(e);
       setStatus("Fullscreen nicht verfügbar");
     } finally {
       updateFullscreenBtn();
     }
   });
-  document.addEventListener("fullscreenchange", updateFullscreenBtn);
-  document.addEventListener("webkitfullscreenchange", updateFullscreenBtn);
+  document.addEventListener('fullscreenchange', updateFullscreenBtn);
+  document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
 
   // -------------------------
-  // Capture flow (IndexedDB)
+  // UI wiring
   // -------------------------
-  async function takeShot(){
-    if (!stream || !isPortrait()) return;
-
-    setStatus("Speichere…");
-
-    const blob = await captureToBlob();
-    if (!blob){
-      setStatus("Foto fehlgeschlagen");
-      return;
-    }
-
-    // 1) create capture record (auto id)
-    const t = tx(["captures","photos"], "readwrite");
-    const capturesStore = t.objectStore("captures");
-    const photosStore = t.objectStore("photos");
-
-    const record = {
-      ts: new Date().toISOString(),
-      heading: latest.heading,
-      yaw: latest.yaw,
-      pitch: latest.pitch,
-      roll: latest.roll
-    };
-
-    let id;
+  els.btnStart.addEventListener('click', async () => {
+    // Single user gesture: start camera + ask motion permission
     try{
-      id = await idbAdd(capturesStore, record); // autoIncrement id returned
-      await idbPut(photosStore, { id, mime: "image/jpeg", blob });
+      setStatus("Starte…");
+      // Start motion permission first (still within user gesture)
+      await requestMotionPermissionAndStart();
+
+      // Then camera
+      await startCamera({ facingMode: facing });
     } catch(e){
       console.error(e);
-      setStatus("DB Fehler beim Speichern");
-      return;
+      setStatus("Start fehlgeschlagen");
+      stopCamera();
     }
+  });
 
-    // download file too (optional, nice for user)
-    const fname = photoFileName(id);
-    downloadBlob(fname, blob);
+  els.btnStop.addEventListener('click', stopCamera);
+  els.btnShot.addEventListener('click', capturePhoto);
+  els.btnExportZip.addEventListener('click', exportZip);
 
-    await refreshCount();
-    await updateLastUI();
-    setStatus(`Gespeichert: #${id}`);
-  }
+  els.btnClear.addEventListener('click', () => {
+    sessionStorage.removeItem(STORE_KEY);
+    saveCaptures([]);
+    photoBlobs.clear(); // clear RAM photos too
+    setStatus("Session gelöscht");
+  });
 
-  // -------------------------
-  // Exports (from IndexedDB)
-  // -------------------------
-  async function exportJson(){
-    const t = tx(["captures"], "readonly");
-    const records = await idbGetAll(t.objectStore("captures"));
-    records.sort((a,b)=>a.id-b.id);
-    downloadJson("captures.json", records);
+  els.btnFlip.addEventListener('click', flipCamera);
 
-    if (els.chkBase64Export.checked){
-      // create extra file with base64 images (can be huge)
-      setStatus("Erzeuge Base64 JSON…");
-      const t2 = tx(["photos"], "readonly");
-      const ps = t2.objectStore("photos");
+  els.cameraSelect.addEventListener('change', async () => {
+    await selectCameraByDeviceId(els.cameraSelect.value);
+  });
 
-      const withB64 = [];
-      for (const r of records){
-        const p = await idbGet(ps, r.id);
-        if (p?.blob){
-          const b64 = await blobToBase64(p.blob);
-          withB64.push({
-            ...r,
-            photoFile: photoFileName(r.id),
-            photoMime: p.mime || "image/jpeg",
-            photoBase64: b64
-          });
-        } else {
-          withB64.push({ ...r });
-        }
-      }
-      downloadJson("captures_with_base64.json", withB64);
-      setStatus("JSON exportiert");
-    }
-  }
-
-  async function exportZip(){
-    if (typeof JSZip === "undefined"){
-      setStatus("ZIP lib fehlt");
-      return;
-    }
-
-    setStatus("ZIP wird erstellt…");
-
-    const t = tx(["captures","photos"], "readonly");
-    const captures = await idbGetAll(t.objectStore("captures"));
-    captures.sort((a,b)=>a.id-b.id);
-
-    const zip = new JSZip();
-    zip.file("captures.json", JSON.stringify(captures, null, 2));
-
-    const photosFolder = zip.folder("photos");
-    const photosStore = t.objectStore("photos");
-
-    // add images as binary blobs
-    for (const r of captures){
-      const p = await idbGet(photosStore, r.id);
-      if (p?.blob){
-        photosFolder.file(photoFileName(r.id), p.blob);
-      }
-    }
-
-    if (els.chkBase64Export.checked){
-      // optional extra base64 JSON in zip
-      const withB64 = [];
-      for (const r of captures){
-        const p = await idbGet(photosStore, r.id);
-        if (p?.blob){
-          const b64 = await blobToBase64(p.blob);
-          withB64.push({
-            ...r,
-            photoFile: photoFileName(r.id),
-            photoMime: p.mime || "image/jpeg",
-            photoBase64: b64
-          });
-        } else withB64.push({ ...r });
-      }
-      zip.file("captures_with_base64.json", JSON.stringify(withB64, null, 2));
-    }
-
-    const blob = await zip.generateAsync({ type:"blob" });
-    downloadBlob("capture_export.zip", blob);
-    setStatus("ZIP exportiert");
-  }
-
-  async function clearDB(){
-    setStatus("Lösche DB…");
-    const t = tx(["captures","photos"], "readwrite");
-    await idbClear(t.objectStore("captures"));
-    await idbClear(t.objectStore("photos"));
-    await refreshCount();
-    await updateLastUI();
-    setStatus("DB gelöscht");
-  }
-
-  // -------------------------
-  // Zoom buttons
-  // -------------------------
-  els.zoomRow.addEventListener("click", async (e) => {
-    const btn = e.target.closest(".chip");
+  els.zoomRow.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.chip');
     if (!btn) return;
-
     const z = parseFloat(btn.dataset.z);
-    [...els.zoomRow.querySelectorAll(".chip")].forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
 
-    // try zoom constraint
+    [...els.zoomRow.querySelectorAll('.chip')].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
     const ok = await trySetZoom(z);
-    if (ok) return;
-
-    // fallback heuristic switch by label (best effort)
-    const opts = [...els.cameraSelect.options];
-    const want = (z === 0.5) ? ["ultra","weit","wide","0.5"]
-               : (z >= 2) ? ["tele","2","3","5"]
-               : ["wide","1","standard"];
-    const match = opts.find(o => want.some(k => (o.textContent||"").toLowerCase().includes(k)));
-    if (match){
-      setStatus("Wechsle Kamera…");
-      await selectCameraByDeviceId(match.value);
-      setStatus("Kamera läuft");
-    } else {
+    if (!ok){
       setStatus("Zoom nicht verfügbar");
     }
   });
 
-  // -------------------------
-  // Bind UI actions
-  // -------------------------
-  els.btnStart.addEventListener("click", () => startCamera({ facingMode:facing }));
-  els.btnStop.addEventListener("click", stopCamera);
-  els.btnFlip.addEventListener("click", flipCamera);
-  els.btnShot.addEventListener("click", takeShot);
-  els.btnMotion.addEventListener("click", requestMotionPermission);
-  els.cameraSelect.addEventListener("change", () => selectCameraByDeviceId(els.cameraSelect.value));
-
-  els.btnExportJson.addEventListener("click", exportJson);
-  els.btnExportZip.addEventListener("click", exportZip);
-  els.btnClear.addEventListener("click", clearDB);
-
-  // -------------------------
   // Init
-  // -------------------------
-  (async () => {
-    try{
-      db = await openDB();
-      await refreshCount();
-      await updateLastUI();
-      updatePortraitUI();
-      updateFullscreenBtn();
-      setStatus("Bereit");
-    } catch(e){
-      console.error(e);
-      setStatus("IndexedDB nicht verfügbar");
-    }
-  })();
+  updatePortraitUI();
+  saveCaptures(loadCaptures());
+  updateSensorUI();
+  updateFullscreenBtn();
 })();
 </script>
 </body>
