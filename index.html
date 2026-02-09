@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard</title>
+
+  <style>
+    :root{
+      --bg1:#0b1020;
+      --bg2:#070a14;
+      --card: rgba(255,255,255,.08);
+      --card2: rgba(255,255,255,.12);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.65);
+      --shadow: 0 20px 60px rgba(0,0,0,.45);
+      --radius: 18px;
+    }
+
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      min-height:100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      color:var(--text);
+      background:
+        radial-gradient(1200px 800px at 20% 10%, rgba(99,102,241,.28), transparent 60%),
+        radial-gradient(1000px 700px at 85% 30%, rgba(34,197,94,.18), transparent 55%),
+        radial-gradient(900px 700px at 50% 90%, rgba(56,189,248,.16), transparent 60%),
+        linear-gradient(180deg, var(--bg1), var(--bg2));
+      display:grid;
+      place-items:center;
+      padding:28px;
+    }
+
+    .wrap{
+      width:min(980px, 100%);
+    }
+
+    header{
+      display:flex;
+      gap:14px;
+      align-items:flex-end;
+      justify-content:space-between;
+      margin-bottom:18px;
+    }
+
+    .title{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+
+    h1{
+      font-size: clamp(22px, 3.2vw, 34px);
+      line-height:1.1;
+      margin:0;
+      letter-spacing:-0.02em;
+    }
+
+    p{
+      margin:0;
+      color:var(--muted);
+      font-size:14px;
+    }
+
+    .card{
+      background: linear-gradient(180deg, var(--card), rgba(255,255,255,.05));
+      border: 1px solid rgba(255,255,255,.10);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+      padding:18px;
+      backdrop-filter: blur(10px);
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap:14px;
+    }
+
+    /* Responsive: auf kleineren Screens 2 Spalten, ganz klein 1 Spalte */
+    @media (max-width: 720px){
+      .grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 440px){
+      .grid{ grid-template-columns: 1fr; }
+    }
+
+    button.tile{
+      width:100%;
+      border: 1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.06));
+      color:var(--text);
+      border-radius: 16px;
+      padding:18px 16px;
+      text-align:left;
+      cursor:pointer;
+      transition: transform .12s ease, background .12s ease, border-color .12s ease;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      min-height: 92px;
+      outline: none;
+    }
+
+    button.tile:hover{
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,.22);
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.08));
+    }
+
+    button.tile:active{
+      transform: translateY(0px) scale(.99);
+    }
+
+    .tile .label{
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      font-size: 16px;
+    }
+
+    .tile .hint{
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .top-actions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+    }
+
+    .pill{
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      color: var(--muted);
+      padding:10px 12px;
+      border-radius:999px;
+      font-size:13px;
+      user-select:none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">
+        <h1>Online 3DLaserScanner Project</h1>
+        <p>Web-Based 3D Laser Scanner: A personal project focused on the practical implementation of laser triangulation and camera calibration.</p>
+      </div>
+    </header>
+
+    <main class="card">
+      <div class="grid" id="grid"></div>
+    </main>
+  </div>
+
+  <script>
+    const buttons = [
+      { label: "Target Generator", hint: "CALIBRATION PATTERN GENERATOR", url: "seite1.html" },
+      { label: "Centroid Detection", hint: "MANUAL CENTROID EXTRACTION", url: "seite2.html" },
+      { label: "Intrinsic Calibration", hint: "PRINCIPAL POINT | FOCAL LENGTH | DISTORTION COEFFICIENTS", url: "seite3.html" },
+
+    ];
+
+    const grid = document.getElementById("grid");
+
+    buttons.forEach((b) => {
+      const btn = document.createElement("button");
+      btn.className = "tile";
+      btn.type = "button";
+
+      btn.innerHTML = `
+        <div class="label">${b.label}</div>
+        <div class="hint">${b.hint}</div>
+      `;
+
+      // Öffnet Seite im gleichen Tab:
+      btn.addEventListener("click", () => {
+        window.location.href = b.url;
+      });
+
+      grid.appendChild(btn);
+    });
+  </script>
+</body>
+</html>
