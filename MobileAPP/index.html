@@ -158,7 +158,6 @@
     </div>
 
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <button class="btn" id="btnFullscreen">Fullscreen</button>
       <button class="btn primary" id="btnStart">Start</button>
       <button class="btn danger" id="btnStop" disabled>Stop</button>
     </div>
@@ -261,7 +260,6 @@
     zoomRow: document.getElementById('zoomRow'),
     hint: document.getElementById('hint'),
 
-    btnFullscreen: document.getElementById('btnFullscreen'),
     thumb: document.getElementById('thumb'),
   };
 
@@ -294,7 +292,6 @@
   // -------------------------
   // In-memory photo store (no base64 persistence, no indexeddb)
   // -------------------------
-  // Store photos as Blobs in RAM for ZIP export
   const photoBlobs = new Map(); // id -> { filename, blob }
 
   function downloadBlob(filename, blob){
@@ -315,7 +312,9 @@
   function updateSensorUI(){
     const h = latest.heading;
     const y = latest.yaw, p = latest.pitch, r = latest.roll;
+
     els.pillHeading.textContent = (h == null) ? "Heading: —" : `Heading: ${h.toFixed(0)}°`;
+
     if (y == null || p == null || r == null){
       els.pillEuler.textContent = "Yaw/Pitch/Roll: — / — / —";
     } else {
@@ -328,13 +327,10 @@
     motionActive = true;
 
     window.addEventListener('deviceorientation', (ev) => {
-      // Heading: iOS Safari non-standard
       const heading = (typeof ev.webkitCompassHeading === 'number')
         ? ev.webkitCompassHeading
         : (typeof ev.alpha === 'number' ? ev.alpha : null);
 
-      // Pragmatic Euler-ish mapping:
-      // yaw ~ alpha, pitch ~ beta, roll ~ gamma
       const yaw   = (typeof ev.alpha === 'number') ? ev.alpha : null;
       const pitch = (typeof ev.beta  === 'number') ? ev.beta  : null;
       const roll  = (typeof ev.gamma === 'number') ? ev.gamma : null;
@@ -345,7 +341,6 @@
   }
 
   async function requestMotionPermissionAndStart(){
-    // Must be called from user gesture on iOS
     let ok = true;
 
     try{
@@ -528,7 +523,6 @@
     const ctx = canvas.getContext('2d');
     ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
-    // Create Blob (better for ZIP) + also preview thumbnail + optional direct download
     const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob){
       setStatus("Foto Fehler");
@@ -541,11 +535,7 @@
     // thumbnail preview
     const url = URL.createObjectURL(blob);
     els.thumb.src = url;
-    // release old object URLs later to avoid leaks
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
-
-    // OPTIONAL: direct download of each photo file (uncomment if you want)
-    // downloadBlob(filename, blob);
 
     // metadata record in sessionStorage
     const rec = {
@@ -556,6 +546,7 @@
       pitch: latest.pitch,
       roll: latest.roll
     };
+
     captures.push(rec);
     saveCaptures(captures);
 
@@ -590,7 +581,7 @@
           missing.push(`#${id}`);
           continue;
         }
-        photos.file(entry.filename, entry.blob); // Blob directly
+        photos.file(entry.filename, entry.blob);
       }
 
       if (missing.length){
@@ -611,50 +602,13 @@
   }
 
   // -------------------------
-  // Fullscreen toggle
-  // -------------------------
-  function isFullscreen(){
-    return !!(document.fullscreenElement || document.webkitFullscreenElement);
-  }
-  function updateFullscreenBtn(){
-    els.btnFullscreen.textContent = isFullscreen() ? "Normal" : "Fullscreen";
-  }
-  async function enterFullscreen(){
-    const el = document.documentElement;
-    if (el.requestFullscreen) return el.requestFullscreen();
-    if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
-    throw new Error("Fullscreen not supported");
-  }
-  async function exitFullscreen(){
-    if (document.exitFullscreen) return document.exitFullscreen();
-    if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
-    throw new Error("Exit fullscreen not supported");
-  }
-
-  els.btnFullscreen.addEventListener('click', async () => {
-    try{
-      if (!isFullscreen()) await enterFullscreen();
-      else await exitFullscreen();
-    } catch(e){
-      setStatus("Fullscreen nicht verfügbar");
-    } finally {
-      updateFullscreenBtn();
-    }
-  });
-  document.addEventListener('fullscreenchange', updateFullscreenBtn);
-  document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
-
-  // -------------------------
   // UI wiring
   // -------------------------
   els.btnStart.addEventListener('click', async () => {
-    // Single user gesture: start camera + ask motion permission
+    // Single user gesture: start motion permission + camera
     try{
       setStatus("Starte…");
-      // Start motion permission first (still within user gesture)
       await requestMotionPermissionAndStart();
-
-      // Then camera
       await startCamera({ facingMode: facing });
     } catch(e){
       console.error(e);
@@ -670,7 +624,7 @@
   els.btnClear.addEventListener('click', () => {
     sessionStorage.removeItem(STORE_KEY);
     saveCaptures([]);
-    photoBlobs.clear(); // clear RAM photos too
+    photoBlobs.clear();
     setStatus("Session gelöscht");
   });
 
@@ -698,7 +652,6 @@
   updatePortraitUI();
   saveCaptures(loadCaptures());
   updateSensorUI();
-  updateFullscreenBtn();
 })();
 </script>
 </body>
