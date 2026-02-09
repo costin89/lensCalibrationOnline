@@ -1,1 +1,437 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Vanilla Camera App</title>
+  <style>
+    :root{
+      --bg:#0b0c10; --card:#12141c; --muted:#a9b0c3; --text:#eef1ff;
+      --accent:#7c5cff; --danger:#ff4d6d;
+      --radius:18px;
+    }
+    *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
+    body{margin:0;background:linear-gradient(180deg,#07080c, #0b0c10);color:var(--text);}
+    .wrap{max-width:540px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;}
+    header{padding:14px 14px 8px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;}
+    .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px}
+    .btn{
+      border:0;border-radius:999px;padding:10px 12px;font-weight:650;
+      background:rgba(255,255,255,.08);color:var(--text);
+      border:1px solid rgba(255,255,255,.14);
+      cursor:pointer; user-select:none;
+    }
+    .btn.primary{background:var(--accent);border-color:transparent;}
+    .btn.danger{background:rgba(255,77,109,.14);border-color:rgba(255,77,109,.35);color:#ffd6de;}
+    .btn:disabled{opacity:.45;cursor:not-allowed;}
+    .stage{padding:10px 14px;flex:1;display:flex;flex-direction:column;gap:12px;}
+    .viewfinder{
+      position:relative;flex:1;background:var(--card);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:var(--radius);
+      overflow:hidden;
+      box-shadow:0 20px 60px rgba(0,0,0,.35);
+    }
+    video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1);}
+    .back video{transform:none;} /* back camera: no mirror */
+    .overlay{
+      position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:space-between;
+      padding:10px;pointer-events:none;
+    }
+    .hud{display:flex;flex-direction:column;gap:6px}
+    .hud .pill{backdrop-filter:blur(10px);background:rgba(0,0,0,.35);border-color:rgba(255,255,255,.14);color:#d6dbf0}
+    .portraitBlock{
+      position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;
+      padding:22px;background:rgba(0,0,0,.72);backdrop-filter:blur(10px);
+    }
+    .portraitBlock.show{display:flex;}
+    .portraitBlock .card{
+      background:rgba(18,20,28,.85);border:1px solid rgba(255,255,255,.14);
+      border-radius:22px;padding:18px;max-width:320px;
+    }
+    .portraitBlock h2{margin:0 0 8px 0;font-size:18px;}
+    .portraitBlock p{margin:0;color:var(--muted);font-size:13px;line-height:1.35}
+    .controls{
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
+      border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:10px;
+    }
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
+    select{
+      background:rgba(255,255,255,.06);color:var(--text);border:1px solid rgba(255,255,255,.14);
+      border-radius:12px;padding:10px;min-width:210px;
+    }
+    .zoomRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .chip{
+      border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);
+      color:var(--text);padding:8px 10px;border-radius:999px;cursor:pointer;font-weight:650;
+    }
+    .chip.active{background:rgba(124,92,255,.22);border-color:rgba(124,92,255,.65);}
+    .thumb{
+      width:72px;height:72px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);
+    }
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    footer{padding:10px 14px 16px 14px;color:var(--muted);font-size:12px;line-height:1.35}
+    a{color:#c9c2ff}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="pill" id="statusPill">Bereit</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn" id="btnMotion">Gyro/Kompass aktivieren</button>
+      <button class="btn danger" id="btnStop">Stop</button>
+    </div>
+  </header>
 
+  <div class="stage">
+    <div class="viewfinder" id="viewfinder">
+      <div class="overlay">
+        <div class="hud">
+          <div class="pill" id="pillOrientation">Portrait: ?</div>
+          <div class="pill" id="pillHeading">Heading: —</div>
+        </div>
+        <div class="hud" style="align-items:flex-end">
+          <div class="pill" id="pillZoom">Zoom: —</div>
+        </div>
+      </div>
+
+      <video id="video" playsinline muted></video>
+
+      <div class="portraitBlock" id="portraitBlock">
+        <div class="card">
+          <h2>Bitte ins Hochformat drehen</h2>
+          <p>Fotoaufnahme ist nur im Portrait-Modus aktiv.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="row">
+        <button class="btn primary" id="btnStart">Kamera starten</button>
+        <button class="btn primary" id="btnShot" disabled>Foto aufnehmen</button>
+        <div class="thumb" title="Letztes Foto">
+          <img id="thumb" alt="" />
+        </div>
+      </div>
+
+      <div class="row">
+        <label style="display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;">
+          Kamera:
+          <select id="cameraSelect" disabled></select>
+        </label>
+
+        <button class="btn" id="btnFlip" disabled>Front/Back</button>
+      </div>
+
+      <div class="row">
+        <div class="zoomRow" id="zoomRow" aria-label="Zoom">
+          <span style="color:var(--muted);font-size:12px;margin-right:6px;">Zoom:</span>
+          <button class="chip" data-z="0.5">0,5x</button>
+          <button class="chip active" data-z="1">1x</button>
+          <button class="chip" data-z="2">2x</button>
+          <button class="chip" data-z="5">5x</button>
+        </div>
+      </div>
+
+      <div class="pill" id="hint">
+        Hinweis: 0,5x/2x/5x geht im Web nur, wenn Safari das als separate Kamera oder Zoom-Capability bereitstellt.
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Läuft am zuverlässigsten über <b>HTTPS</b>. iOS fragt Kamera-Permission automatisch beim Start an.
+    Motion/Kompass erfordern extra Button (iOS).
+  </footer>
+</div>
+
+<script>
+(() => {
+  const els = {
+    video: document.getElementById('video'),
+    viewfinder: document.getElementById('viewfinder'),
+    portraitBlock: document.getElementById('portraitBlock'),
+    statusPill: document.getElementById('statusPill'),
+    pillOrientation: document.getElementById('pillOrientation'),
+    pillHeading: document.getElementById('pillHeading'),
+    pillZoom: document.getElementById('pillZoom'),
+    cameraSelect: document.getElementById('cameraSelect'),
+    btnStart: document.getElementById('btnStart'),
+    btnStop: document.getElementById('btnStop'),
+    btnShot: document.getElementById('btnShot'),
+    btnFlip: document.getElementById('btnFlip'),
+    btnMotion: document.getElementById('btnMotion'),
+    thumb: document.getElementById('thumb'),
+    zoomRow: document.getElementById('zoomRow'),
+    hint: document.getElementById('hint'),
+  };
+
+  let stream = null;
+  let currentDeviceId = null;
+  let facing = 'environment'; // 'user' | 'environment'
+  let videoTrack = null;
+
+  function setStatus(text){ els.statusPill.textContent = text; }
+
+  function isPortrait(){
+    return window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
+  }
+
+  function updatePortraitUI(){
+    const ok = isPortrait();
+    els.pillOrientation.textContent = "Portrait: " + (ok ? "Ja" : "Nein");
+    els.portraitBlock.classList.toggle('show', !ok);
+    els.btnShot.disabled = !ok || !stream;
+  }
+
+  window.addEventListener('orientationchange', updatePortraitUI);
+  window.addEventListener('resize', updatePortraitUI);
+
+  async function startCamera({ deviceId=null, facingMode='environment' } = {}) {
+    stopCamera();
+
+    const constraints = {
+      audio: false,
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: deviceId ? undefined : { ideal: facingMode },
+        deviceId: deviceId ? { exact: deviceId } : undefined
+      }
+    };
+
+    try{
+      setStatus("Kamera-Permission…");
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      els.video.srcObject = stream;
+
+      // best effort: wait for metadata
+      await new Promise(res => els.video.onloadedmetadata = res);
+      await els.video.play();
+
+      videoTrack = stream.getVideoTracks()[0];
+      const settings = videoTrack.getSettings?.() || {};
+      currentDeviceId = settings.deviceId || deviceId || null;
+
+      // UI: mirror only for front camera
+      if (facingMode === 'user') els.viewfinder.classList.remove('back');
+      else els.viewfinder.classList.add('back');
+
+      setStatus("Kamera läuft");
+      els.btnStop.disabled = false;
+      els.btnFlip.disabled = false;
+
+      await refreshDeviceList();
+      updateZoomUIFromCapabilities();
+      updatePortraitUI();
+
+    } catch(err){
+      console.error(err);
+      setStatus("Fehler: " + (err.name || "getUserMedia"));
+      els.hint.textContent =
+        "Tipp: iOS braucht HTTPS. Wenn Permission geblockt ist: Safari Einstellungen → Kamera → erlauben.";
+      stopCamera();
+    }
+  }
+
+  function stopCamera(){
+    if (stream){
+      stream.getTracks().forEach(t => t.stop());
+    }
+    stream = null;
+    videoTrack = null;
+    currentDeviceId = null;
+    els.video.srcObject = null;
+    els.btnShot.disabled = true;
+    els.cameraSelect.disabled = true;
+    els.btnFlip.disabled = true;
+    setStatus("Gestoppt");
+    updatePortraitUI();
+  }
+
+  async function refreshDeviceList(){
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+
+    els.cameraSelect.innerHTML = "";
+    cams.forEach((c, idx) => {
+      const opt = document.createElement('option');
+      opt.value = c.deviceId;
+      // Labels sind erst nach Permission sichtbar
+      opt.textContent = c.label ? c.label : `Kamera ${idx+1}`;
+      if (currentDeviceId && c.deviceId === currentDeviceId) opt.selected = true;
+      els.cameraSelect.appendChild(opt);
+    });
+
+    els.cameraSelect.disabled = cams.length === 0;
+  }
+
+  function updateZoomUIFromCapabilities(){
+    if (!videoTrack?.getCapabilities){
+      els.pillZoom.textContent = "Zoom: —";
+      return;
+    }
+    const caps = videoTrack.getCapabilities();
+    if (caps && 'zoom' in caps){
+      els.pillZoom.textContent = `Zoom: supported (${caps.zoom.min}–${caps.zoom.max})`;
+      els.hint.textContent =
+        "Zoom-Capability erkannt: Buttons versuchen applyConstraints(zoom). Falls iOS es ignoriert, ist das normal.";
+    } else {
+      els.pillZoom.textContent = "Zoom: nicht exposed";
+      els.hint.textContent =
+        "Safari/iOS expose’t Zoom oft nicht. Dann funktionieren 0,5x/2x/5x nur, wenn Safari separate Kameras listet.";
+    }
+  }
+
+  async function trySetZoom(z){
+    if (!videoTrack?.getCapabilities || !videoTrack?.applyConstraints) return false;
+    const caps = videoTrack.getCapabilities();
+    if (!caps || !('zoom' in caps)) return false;
+
+    // clamp into supported range
+    const target = Math.min(caps.zoom.max, Math.max(caps.zoom.min, z));
+
+    try{
+      await videoTrack.applyConstraints({ advanced: [{ zoom: target }] });
+      els.pillZoom.textContent = `Zoom: ${target.toFixed(2)} (applyConstraints)`;
+      return true;
+    } catch(e){
+      console.warn("applyConstraints zoom failed", e);
+      return false;
+    }
+  }
+
+  async function selectCameraByDeviceId(deviceId){
+    // Keep facing guess: labels may hint but not reliable
+    const opt = [...els.cameraSelect.options].find(o => o.value === deviceId);
+    const label = opt?.textContent?.toLowerCase() || "";
+    facing = label.includes("front") || label.includes("vorne") ? "user" : "environment";
+    await startCamera({ deviceId });
+  }
+
+  async function flipCamera(){
+    facing = (facing === 'environment') ? 'user' : 'environment';
+    await startCamera({ facingMode: facing });
+  }
+
+  function capturePhoto(){
+    if (!stream || !isPortrait()) return;
+
+    const v = els.video;
+    const canvas = document.createElement('canvas');
+
+    // Use actual video dimensions
+    const w = v.videoWidth;
+    const h = v.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(v, 0, 0, w, h);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    els.thumb.src = dataUrl;
+
+    // Optional: download
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = "photo.jpg";
+    a.click();
+  }
+
+  async function requestMotionPermission(){
+    // iOS: must be in a user gesture
+    let ok = false;
+
+    try{
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const res = await DeviceOrientationEvent.requestPermission();
+        ok = (res === 'granted');
+      } else {
+        ok = true; // other browsers: no permission prompt here
+      }
+    } catch(e){
+      console.warn("DeviceOrientationEvent permission error", e);
+    }
+
+    try{
+      if (typeof DeviceMotionEvent !== 'undefined' &&
+          typeof DeviceMotionEvent.requestPermission === 'function') {
+        const res2 = await DeviceMotionEvent.requestPermission();
+        ok = ok && (res2 === 'granted');
+      }
+    } catch(e){
+      console.warn("DeviceMotionEvent permission error", e);
+    }
+
+    if (!ok){
+      setStatus("Motion/Kompass abgelehnt");
+      return;
+    }
+
+    setStatus("Motion/Kompass aktiv");
+    window.addEventListener('deviceorientation', (ev) => {
+      // iOS Safari: ev.webkitCompassHeading (0..360) ist oft am brauchbarsten
+      const heading = (typeof ev.webkitCompassHeading === 'number')
+        ? ev.webkitCompassHeading
+        : (typeof ev.alpha === 'number' ? ev.alpha : null);
+
+      if (heading == null){
+        els.pillHeading.textContent = "Heading: —";
+      } else {
+        els.pillHeading.textContent = "Heading: " + heading.toFixed(0) + "°";
+      }
+    }, { passive: true });
+  }
+
+  // Zoom buttons: try zoom first; if not, do nothing (could implement heuristics by label)
+  els.zoomRow.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.chip');
+    if (!btn) return;
+    const z = parseFloat(btn.dataset.z);
+
+    [...els.zoomRow.querySelectorAll('.chip')].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const zoomOk = await trySetZoom(z);
+    if (!zoomOk){
+      // fallback: try to pick a camera that *looks* like the desired lens (best-effort)
+      // NOTE: Labels are localized and unreliable. We only do a very soft heuristic.
+      const opts = [...els.cameraSelect.options];
+      const want = (z === 0.5) ? ['ultra', 'weit', 'wide', '0.5']
+                 : (z >= 2) ? ['tele', '2', '3', '5']
+                 : ['wide', '1', 'standard'];
+
+      const match = opts.find(o => want.some(k => (o.textContent || "").toLowerCase().includes(k)));
+      if (match){
+        setStatus("Wechsle Kamera (heuristisch) …");
+        await selectCameraByDeviceId(match.value);
+      } else {
+        setStatus("Zoom/Lens nicht verfügbar");
+      }
+    }
+  });
+
+  // Events
+  els.btnStart.addEventListener('click', () => startCamera({ facingMode: facing }));
+  els.btnStop.addEventListener('click', stopCamera);
+  els.btnFlip.addEventListener('click', flipCamera);
+  els.btnShot.addEventListener('click', capturePhoto);
+  els.btnMotion.addEventListener('click', requestMotionPermission);
+
+  els.cameraSelect.addEventListener('change', async () => {
+    await selectCameraByDeviceId(els.cameraSelect.value);
+  });
+
+  // init
+  els.btnStop.disabled = true;
+  updatePortraitUI();
+})();
+</script>
+</body>
+</html>
