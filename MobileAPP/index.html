@@ -3,7 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Vanilla Camera App</title>
+  <title>Camera + IMU Logger (IndexedDB)</title>
+
+  <!-- JSZip (für ZIP Export) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
   <style>
     :root{
       --bg:#0b0c10; --card:#12141c; --muted:#a9b0c3; --text:#eef1ff;
@@ -12,35 +16,45 @@
     }
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
     body{margin:0;background:linear-gradient(180deg,#07080c, #0b0c10);color:var(--text);}
-    .wrap{max-width:590px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;}
-    header{padding:14px 14px 8px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
-    .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px}
+    .wrap{max-width:620px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;}
+    header{
+      padding:14px 14px 10px 14px;
+      display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+    }
+    .left, .right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);
+      padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px}
     .btn{
-      border:0;border-radius:999px;padding:10px 12px;font-weight:650;
+      border:0;border-radius:999px;padding:10px 12px;font-weight:750;
       background:rgba(255,255,255,.08);color:var(--text);
       border:1px solid rgba(255,255,255,.14);
       cursor:pointer; user-select:none;
     }
     .btn.primary{background:var(--accent);border-color:transparent;}
     .btn.danger{background:rgba(255,77,109,.14);border-color:rgba(255,77,109,.35);color:#ffd6de;}
+    .btn.icon{width:42px;height:42px;border-radius:999px;display:grid;place-items:center;padding:0;font-size:18px}
     .btn:disabled{opacity:.45;cursor:not-allowed;}
     .stage{padding:10px 14px;flex:1;display:flex;flex-direction:column;gap:12px;}
+
     .viewfinder{
-      position:relative;flex:1;min-height:380px;background:var(--card);
+      position:relative;flex:1;min-height:420px;background:var(--card);
       border:1px solid rgba(255,255,255,.10);
       border-radius:var(--radius);
       overflow:hidden;
-      box-shadow:0 20px 60px rgba(0,0,0,.35);
+      box-shadow:0 18px 60px rgba(0,0,0,.35);
     }
     video{width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1);}
-    .back video{transform:none;} /* back camera: no mirror */
+    .back video{transform:none;}
+
     .overlay{
       position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:space-between;
       padding:10px;pointer-events:none;gap:10px;
     }
-    .hud{display:flex;flex-direction:column;gap:6px;min-width:160px}
+    .hud{display:flex;flex-direction:column;gap:6px;min-width:165px}
     .hud.right{align-items:flex-end;min-width:auto}
-    .hud .pill{backdrop-filter:blur(10px);background:rgba(0,0,0,.35);border-color:rgba(255,255,255,.14);color:#d6dbf0}
+    .hud .pill{backdrop-filter:blur(10px);background:rgba(0,0,0,.35);
+      border-color:rgba(255,255,255,.14);color:#d6dbf0}
+
     .portraitBlock{
       position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;
       padding:22px;background:rgba(0,0,0,.72);backdrop-filter:blur(10px);
@@ -48,54 +62,75 @@
     .portraitBlock.show{display:flex;}
     .portraitBlock .card{
       background:rgba(18,20,28,.85);border:1px solid rgba(255,255,255,.14);
-      border-radius:22px;padding:18px;max-width:340px;
+      border-radius:22px;padding:18px;max-width:360px;
     }
     .portraitBlock h2{margin:0 0 8px 0;font-size:18px;}
     .portraitBlock p{margin:0;color:var(--muted);font-size:13px;line-height:1.35}
-    .controls{
+
+    .bottomBar{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
       background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
-      border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:10px;
+      border-radius:22px;padding:10px 12px;
     }
-    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
-    select{
-      background:rgba(255,255,255,.06);color:var(--text);border:1px solid rgba(255,255,255,.14);
-      border-radius:12px;padding:10px;min-width:240px;max-width:100%;
-    }
-    .zoomRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .thumb{width:64px;height:64px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.06);}
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px}
+    .chips{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
     .chip{
       border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);
-      color:var(--text);padding:8px 10px;border-radius:999px;cursor:pointer;font-weight:650;
+      color:var(--text);padding:8px 10px;border-radius:999px;cursor:pointer;font-weight:750;
     }
     .chip.active{background:rgba(124,92,255,.22);border-color:rgba(124,92,255,.65);}
-    .thumb{
-      width:72px;height:72px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14);
-      background:rgba(255,255,255,.06);
-    }
-    .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
-    .toggle{
-      display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;
-      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
-      padding:10px 12px;border-radius:16px;
-      width:100%;
-    }
-    .toggle input{transform:scale(1.15);}
-    footer{padding:10px 14px 16px 14px;color:var(--muted);font-size:12px;line-height:1.35}
-    code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
-  </style>
 
-  <!-- ZIP Library (JSZip) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    footer{padding:10px 14px 16px 14px;color:var(--muted);font-size:12px;line-height:1.35}
+
+    /* Drawer */
+    .scrim{
+      position:fixed;inset:0;background:rgba(0,0,0,.55);
+      opacity:0;pointer-events:none;transition:.18s ease;
+    }
+    .scrim.show{opacity:1;pointer-events:auto;}
+    .drawer{
+      position:fixed;left:0;right:0;bottom:0;
+      background:rgba(18,20,28,.96);backdrop-filter:blur(12px);
+      border-top:1px solid rgba(255,255,255,.14);
+      border-radius:22px 22px 0 0;
+      transform:translateY(105%);transition:.22s ease;
+      padding:14px;
+      max-height:78dvh;overflow:auto;
+    }
+    .drawer.show{transform:translateY(0);}
+    .drawer h3{margin:0 0 10px 0;font-size:14px;color:#dfe4ff;}
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:10px 0;}
+    .divider{height:1px;background:rgba(255,255,255,.10);margin:12px 0;}
+    select{
+      background:rgba(255,255,255,.06);color:var(--text);
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:12px;padding:10px;min-width:240px;max-width:100%;
+    }
+    .toggle{
+      display:flex;align-items:flex-start;gap:10px;
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
+      padding:10px 12px;border-radius:16px;width:100%;
+      color:var(--muted);font-size:12px;
+    }
+    .toggle input{transform:scale(1.15);margin-top:2px;}
+    .small{font-size:12px;color:var(--muted);line-height:1.35;}
+  </style>
 </head>
 
 <body>
 <div class="wrap">
   <header>
-    <div class="pill" id="statusPill">Bereit</div>
-
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <button class="btn" id="btnFullscreen">Fullscreen</button>
-      <button class="btn" id="btnMotion">Gyro/Kompass aktivieren</button>
-      <button class="btn danger" id="btnStop" disabled>Stop</button>
+    <div class="left">
+      <div class="pill" id="statusPill">Bereit</div>
+      <div class="pill" id="pillCount">0 records</div>
+    </div>
+    <div class="right">
+      <button class="btn primary" id="btnStart">Start</button>
+      <button class="btn primary" id="btnShot" disabled>Shot</button>
+      <button class="btn icon" id="btnMenu" aria-label="Menü">⋯</button>
     </div>
   </header>
 
@@ -111,7 +146,6 @@
         </div>
         <div class="hud right">
           <div class="pill" id="pillZoom">Zoom: —</div>
-          <div class="pill" id="pillCount">Records: 0</div>
         </div>
       </div>
 
@@ -125,120 +159,145 @@
       </div>
     </div>
 
-    <div class="controls">
-      <div class="row">
-        <button class="btn primary" id="btnStart">Kamera starten</button>
-        <button class="btn primary" id="btnShot" disabled>Foto aufnehmen</button>
-        <div class="thumb" title="Letztes Foto">
-          <img id="thumb" alt="" />
-        </div>
+    <div class="bottomBar">
+      <div class="thumb" title="Letztes Foto"><img id="thumb" alt=""></div>
+      <div class="meta">
+        <span id="metaCam">Cam: —</span>
+        <span id="metaId">Last: —</span>
       </div>
-
-      <div class="row">
-        <label style="display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;">
-          Kamera:
-          <select id="cameraSelect" disabled></select>
-        </label>
-        <button class="btn" id="btnFlip" disabled>Front/Back</button>
+      <div class="chips" id="zoomRow" aria-label="Zoom">
+        <button class="chip" data-z="0.5">0,5x</button>
+        <button class="chip active" data-z="1">1x</button>
+        <button class="chip" data-z="2">2x</button>
+        <button class="chip" data-z="5">5x</button>
       </div>
+    </div>
 
-      <div class="row">
-        <div class="zoomRow" id="zoomRow" aria-label="Zoom">
-          <span style="color:var(--muted);font-size:12px;margin-right:6px;">Zoom:</span>
-          <button class="chip" data-z="0.5">0,5x</button>
-          <button class="chip active" data-z="1">1x</button>
-          <button class="chip" data-z="2">2x</button>
-          <button class="chip" data-z="5">5x</button>
-        </div>
-      </div>
-
-      <label class="toggle" title="Speichert das Foto zusätzlich als Base64 in sessionStorage/JSON. Kann sehr groß werden.">
-        <input type="checkbox" id="chkBase64" />
-        <div>
-          <div style="color:var(--text);font-weight:650">Foto als Base64 im JSON speichern</div>
-          <div style="margin-top:2px">Achtung: macht <code>sessionStorage</code> / JSON schnell riesig.</div>
-        </div>
-      </label>
-
-      <div class="row">
-        <button class="btn" id="btnExportJson" disabled>JSON export</button>
-        <button class="btn" id="btnExportZip" disabled>ZIP export</button>
-        <button class="btn danger" id="btnClear" disabled>Session löschen</button>
-      </div>
-
-      <div class="pill" id="hint">
-        Hinweis: Auf iOS funktionieren 0,5x/2x/5x im Web nur, wenn Safari Zoom-Capabilities oder separate Kameras bereitstellt.
-      </div>
+    <div class="pill" id="hint">
+      Tipp: iOS braucht HTTPS. Motion/Kompass aktivierst du im Menü (⋯). Zoom ist “best effort”.
     </div>
   </div>
 
   <footer>
-    Für iOS am besten über <b>HTTPS</b>. Motion/Kompass brauchen Button-Klick. ZIP: <code>captures.json</code> + Fotos als Dateien.
+    IndexedDB speichert Fotos als JPEG-Blob + Metadaten. ZIP Export funktioniert auch nach Reload.
   </footer>
+</div>
+
+<!-- Drawer -->
+<div class="scrim" id="scrim"></div>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Menü">
+  <div class="row" style="margin-top:0">
+    <h3 style="margin:0">Menü</h3>
+    <button class="btn" id="btnClose">Schließen</button>
+  </div>
+
+  <div class="row">
+    <button class="btn" id="btnMotion">Gyro/Kompass aktivieren</button>
+    <button class="btn" id="btnFullscreen">Fullscreen</button>
+  </div>
+
+  <div class="row">
+    <button class="btn" id="btnFlip" disabled>Front/Back</button>
+    <button class="btn danger" id="btnStop" disabled>Stop</button>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>Kamera</h3>
+  <div class="row">
+    <label class="small">Kamera auswählen:</label>
+    <select id="cameraSelect" disabled></select>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>Export</h3>
+  <label class="toggle" title="Nur beim Export wird zusätzlich eine JSON-Datei mit Base64 Bildern erstellt. Kann sehr groß werden.">
+    <input type="checkbox" id="chkBase64Export" />
+    <div>
+      <div style="color:var(--text);font-weight:750">Beim Export auch Base64-JSON erzeugen</div>
+      <div style="margin-top:2px">Erstellt <code>captures_with_base64.json</code> zusätzlich (riesig möglich).</div>
+    </div>
+  </label>
+
+  <div class="row">
+    <button class="btn" id="btnExportJson" disabled>JSON export</button>
+    <button class="btn" id="btnExportZip" disabled>ZIP export</button>
+    <button class="btn danger" id="btnClear" disabled>DB löschen</button>
+  </div>
+
+  <div class="small">
+    <b>ZIP enthält:</b> <code>captures.json</code> + Ordner <code>photos/</code> mit Bildern.
+  </div>
 </div>
 
 <script>
 (() => {
+  // -------------------------
+  // Elements
+  // -------------------------
   const els = {
     video: document.getElementById('video'),
     viewfinder: document.getElementById('viewfinder'),
     portraitBlock: document.getElementById('portraitBlock'),
 
     statusPill: document.getElementById('statusPill'),
+    pillCount: document.getElementById('pillCount'),
+
     pillOrientation: document.getElementById('pillOrientation'),
     pillHeading: document.getElementById('pillHeading'),
     pillYaw: document.getElementById('pillYaw'),
     pillPitch: document.getElementById('pillPitch'),
     pillRoll: document.getElementById('pillRoll'),
     pillZoom: document.getElementById('pillZoom'),
-    pillCount: document.getElementById('pillCount'),
 
-    cameraSelect: document.getElementById('cameraSelect'),
+    hint: document.getElementById('hint'),
+    thumb: document.getElementById('thumb'),
+    metaCam: document.getElementById('metaCam'),
+    metaId: document.getElementById('metaId'),
 
     btnStart: document.getElementById('btnStart'),
-    btnStop: document.getElementById('btnStop'),
     btnShot: document.getElementById('btnShot'),
-    btnFlip: document.getElementById('btnFlip'),
+    btnMenu: document.getElementById('btnMenu'),
+
+    scrim: document.getElementById('scrim'),
+    drawer: document.getElementById('drawer'),
+    btnClose: document.getElementById('btnClose'),
+
     btnMotion: document.getElementById('btnMotion'),
     btnFullscreen: document.getElementById('btnFullscreen'),
+    btnFlip: document.getElementById('btnFlip'),
+    btnStop: document.getElementById('btnStop'),
 
+    cameraSelect: document.getElementById('cameraSelect'),
+    zoomRow: document.getElementById('zoomRow'),
+
+    chkBase64Export: document.getElementById('chkBase64Export'),
     btnExportJson: document.getElementById('btnExportJson'),
     btnExportZip: document.getElementById('btnExportZip'),
     btnClear: document.getElementById('btnClear'),
-
-    chkBase64: document.getElementById('chkBase64'),
-
-    thumb: document.getElementById('thumb'),
-    zoomRow: document.getElementById('zoomRow'),
-    hint: document.getElementById('hint'),
   };
 
   // -------------------------
-  // session storage
+  // Helpers
   // -------------------------
-  const STORE_KEY = "captures_v1";
+  function setStatus(t){ els.statusPill.textContent = t; }
 
-  function loadCaptures(){
-    try { return JSON.parse(sessionStorage.getItem(STORE_KEY) || "[]"); }
-    catch { return []; }
+  function isPortrait(){
+    return window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
   }
-
-  function saveCaptures(arr){
-    sessionStorage.setItem(STORE_KEY, JSON.stringify(arr));
-    els.btnExportJson.disabled = arr.length === 0;
-    els.btnExportZip.disabled  = arr.length === 0;
-    els.btnClear.disabled      = arr.length === 0;
-    els.pillCount.textContent  = `Records: ${arr.length}`;
+  function updatePortraitUI(){
+    const ok = isPortrait();
+    els.pillOrientation.textContent = "Portrait: " + (ok ? "Ja" : "Nein");
+    els.portraitBlock.classList.toggle('show', !ok);
+    els.btnShot.disabled = !ok || !stream;
   }
-
-  function nextId(arr){
-    const max = arr.reduce((m, x) => Math.max(m, Number(x.id)||0), 0);
-    return max + 1;
-  }
+  window.addEventListener('orientationchange', updatePortraitUI);
+  window.addEventListener('resize', updatePortraitUI);
 
   function padId(id){ return String(id).padStart(4, "0"); }
+  function photoFileName(id){ return `photo_${padId(id)}.jpg`; }
 
-  // Download helpers
   function downloadBlob(filename, blob){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -247,61 +306,216 @@
     a.click();
     URL.revokeObjectURL(url);
   }
-
   function downloadJson(filename, obj){
-    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-    downloadBlob(filename, blob);
+    downloadBlob(filename, new Blob([JSON.stringify(obj, null, 2)], {type:"application/json"}));
+  }
+  function blobToBase64(blob){
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        // data:...;base64,XXXX
+        const s = String(r.result || "");
+        const idx = s.indexOf("base64,");
+        resolve(idx >= 0 ? s.slice(idx + 7) : "");
+      };
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
   }
 
   // -------------------------
-  // camera state
+  // Drawer UI
+  // -------------------------
+  function openDrawer(){
+    els.scrim.classList.add('show');
+    els.drawer.classList.add('show');
+  }
+  function closeDrawer(){
+    els.scrim.classList.remove('show');
+    els.drawer.classList.remove('show');
+  }
+  els.btnMenu.addEventListener('click', openDrawer);
+  els.btnClose.addEventListener('click', closeDrawer);
+  els.scrim.addEventListener('click', closeDrawer);
+
+  // -------------------------
+  // IndexedDB
+  // DB: camlog_v1
+  // stores:
+  //   - captures: { id (auto), ts, heading, yaw, pitch, roll }
+  //   - photos:   { id (same), mime, blob }
+  // -------------------------
+  const DB_NAME = "camlog_v1";
+  const DB_VERSION = 1;
+  let db = null;
+
+  function openDB(){
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const d = req.result;
+        const captures = d.createObjectStore("captures", { keyPath: "id", autoIncrement: true });
+        captures.createIndex("ts", "ts");
+        d.createObjectStore("photos", { keyPath: "id" });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  function tx(storeNames, mode="readonly"){
+    const t = db.transaction(storeNames, mode);
+    return t;
+  }
+
+  function idbGet(store, key){
+    return new Promise((resolve, reject) => {
+      const r = store.get(key);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function idbPut(store, value){
+    return new Promise((resolve, reject) => {
+      const r = store.put(value);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function idbAdd(store, value){
+    return new Promise((resolve, reject) => {
+      const r = store.add(value);
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function idbClear(store){
+    return new Promise((resolve, reject) => {
+      const r = store.clear();
+      r.onsuccess = () => resolve(true);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  function idbGetAll(store){
+    return new Promise((resolve, reject) => {
+      const r = store.getAll();
+      r.onsuccess = () => resolve(r.result || []);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  async function dbCount(){
+    const t = tx(["captures"], "readonly");
+    const store = t.objectStore("captures");
+    return new Promise((resolve, reject) => {
+      const r = store.count();
+      r.onsuccess = () => resolve(r.result || 0);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  async function refreshCount(){
+    const n = await dbCount();
+    els.pillCount.textContent = `${n} records`;
+    els.btnExportJson.disabled = (n === 0);
+    els.btnExportZip.disabled = (n === 0);
+    els.btnClear.disabled = (n === 0);
+  }
+
+  async function getLastCapture(){
+    // simplest: getAll and pick last (fine for small/medium). For huge logs, use cursor.
+    const t = tx(["captures"], "readonly");
+    const store = t.objectStore("captures");
+    const all = await idbGetAll(store);
+    if (!all.length) return null;
+    // autoIncrement id -> highest id is last
+    all.sort((a,b)=>a.id-b.id);
+    return all[all.length - 1];
+  }
+
+  async function updateLastUI(){
+    const last = await getLastCapture();
+    if (!last){
+      els.metaId.textContent = "Last: —";
+      els.thumb.removeAttribute("src");
+      return;
+    }
+    els.metaId.textContent = `Last: #${last.id}`;
+    const t = tx(["photos"], "readonly");
+    const p = await idbGet(t.objectStore("photos"), last.id);
+    if (p?.blob){
+      const url = URL.createObjectURL(p.blob);
+      els.thumb.src = url;
+      // avoid leaking too many object URLs: revoke after image loads
+      els.thumb.onload = () => URL.revokeObjectURL(url);
+    }
+  }
+
+  // -------------------------
+  // Camera
   // -------------------------
   let stream = null;
   let currentDeviceId = null;
-  let facing = 'environment'; // 'user' | 'environment'
+  let facing = "environment";
   let videoTrack = null;
 
-  // Photo cache (in-memory) for ZIP exporting within the current page session.
-  // If you reload the page, only photos stored as Base64 in sessionStorage are still available.
-  const photoCache = new Map(); // id -> dataUrl
+  async function refreshDeviceList(){
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === "videoinput");
 
-  // -------------------------
-  // sensor values
-  // -------------------------
-  let latest = {
-    heading: null,
-    yaw: null,
-    pitch: null,
-    roll: null,
-    ts: null
-  };
+    els.cameraSelect.innerHTML = "";
+    cams.forEach((c, idx) => {
+      const opt = document.createElement("option");
+      opt.value = c.deviceId;
+      opt.textContent = c.label ? c.label : `Kamera ${idx+1}`;
+      if (currentDeviceId && c.deviceId === currentDeviceId) opt.selected = true;
+      els.cameraSelect.appendChild(opt);
+    });
 
-  function setStatus(text){ els.statusPill.textContent = text; }
-
-  function isPortrait(){
-    return window.matchMedia && window.matchMedia("(orientation: portrait)").matches;
+    els.cameraSelect.disabled = cams.length === 0;
+    els.metaCam.textContent = `Cam: ${els.cameraSelect.selectedOptions[0]?.textContent || "—"}`;
   }
 
-  function updatePortraitUI(){
-    const ok = isPortrait();
-    els.pillOrientation.textContent = "Portrait: " + (ok ? "Ja" : "Nein");
-    els.portraitBlock.classList.toggle('show', !ok);
-    els.btnShot.disabled = !ok || !stream;
+  function updateZoomUIFromCapabilities(){
+    if (!videoTrack?.getCapabilities){
+      els.pillZoom.textContent = "Zoom: —";
+      return;
+    }
+    const caps = videoTrack.getCapabilities();
+    if (caps && "zoom" in caps){
+      els.pillZoom.textContent = `Zoom: ${caps.zoom.min}–${caps.zoom.max}`;
+    } else {
+      els.pillZoom.textContent = "Zoom: —";
+    }
   }
 
-  window.addEventListener('orientationchange', updatePortraitUI);
-  window.addEventListener('resize', updatePortraitUI);
+  async function trySetZoom(z){
+    if (!videoTrack?.getCapabilities || !videoTrack?.applyConstraints) return false;
+    const caps = videoTrack.getCapabilities();
+    if (!caps || !("zoom" in caps)) return false;
+    const target = Math.min(caps.zoom.max, Math.max(caps.zoom.min, z));
+    try{
+      await videoTrack.applyConstraints({ advanced: [{ zoom: target }] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
-  async function startCamera({ deviceId=null, facingMode='environment' } = {}) {
+  async function startCamera({ deviceId=null, facingMode="environment" } = {}){
     stopCamera();
-
     const constraints = {
-      audio: false,
-      video: {
-        width:  { ideal: 1280 },
-        height: { ideal: 720 },
-        facingMode: deviceId ? undefined : { ideal: facingMode },
-        deviceId:  deviceId ? { exact: deviceId } : undefined
+      audio:false,
+      video:{
+        width:{ideal:1280},
+        height:{ideal:720},
+        facingMode: deviceId ? undefined : {ideal:facingMode},
+        deviceId:  deviceId ? {exact:deviceId} : undefined
       }
     };
 
@@ -309,7 +523,6 @@
       setStatus("Kamera-Permission…");
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       els.video.srcObject = stream;
-
       await new Promise(res => els.video.onloadedmetadata = res);
       await els.video.play();
 
@@ -317,9 +530,8 @@
       const settings = videoTrack.getSettings?.() || {};
       currentDeviceId = settings.deviceId || deviceId || null;
 
-      // UI mirror only for front cam
-      if (facingMode === 'user') els.viewfinder.classList.remove('back');
-      else els.viewfinder.classList.add('back');
+      if (facingMode === "user") els.viewfinder.classList.remove("back");
+      else els.viewfinder.classList.add("back");
 
       setStatus("Kamera läuft");
       els.btnStop.disabled = false;
@@ -332,197 +544,69 @@
     } catch(err){
       console.error(err);
       setStatus("Fehler: " + (err.name || "getUserMedia"));
-      els.hint.textContent =
-        "Tipp: iOS braucht HTTPS. Wenn Permission geblockt ist: iOS Einstellungen → Safari → Kamera → erlauben.";
+      els.hint.textContent = "Tipp: iOS braucht HTTPS. Kamera-Permission in Safari erlauben.";
       stopCamera();
     }
   }
 
   function stopCamera(){
-    if (stream){
-      stream.getTracks().forEach(t => t.stop());
-    }
+    if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null;
     videoTrack = null;
     currentDeviceId = null;
     els.video.srcObject = null;
     els.btnShot.disabled = true;
-    els.cameraSelect.disabled = true;
-    els.btnFlip.disabled = true;
     els.btnStop.disabled = true;
+    els.btnFlip.disabled = true;
     setStatus("Gestoppt");
     updatePortraitUI();
   }
 
-  async function refreshDeviceList(){
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cams = devices.filter(d => d.kind === 'videoinput');
-
-    els.cameraSelect.innerHTML = "";
-    cams.forEach((c, idx) => {
-      const opt = document.createElement('option');
-      opt.value = c.deviceId;
-      opt.textContent = c.label ? c.label : `Kamera ${idx+1}`;
-      if (currentDeviceId && c.deviceId === currentDeviceId) opt.selected = true;
-      els.cameraSelect.appendChild(opt);
-    });
-
-    els.cameraSelect.disabled = cams.length === 0;
-  }
-
-  function updateZoomUIFromCapabilities(){
-    if (!videoTrack?.getCapabilities){
-      els.pillZoom.textContent = "Zoom: —";
-      return;
-    }
-    const caps = videoTrack.getCapabilities();
-    if (caps && 'zoom' in caps){
-      els.pillZoom.textContent = `Zoom: supported (${caps.zoom.min}–${caps.zoom.max})`;
-      els.hint.textContent =
-        "Zoom-Capability erkannt: Buttons versuchen applyConstraints(zoom). Falls iOS es ignoriert, ist das normal.";
-    } else {
-      els.pillZoom.textContent = "Zoom: nicht exposed";
-      els.hint.textContent =
-        "Safari/iOS expose’t Zoom oft nicht. Dann funktionieren 0,5x/2x/5x nur, wenn Safari separate Kameras listet.";
-    }
-  }
-
-  async function trySetZoom(z){
-    if (!videoTrack?.getCapabilities || !videoTrack?.applyConstraints) return false;
-    const caps = videoTrack.getCapabilities();
-    if (!caps || !('zoom' in caps)) return false;
-
-    const target = Math.min(caps.zoom.max, Math.max(caps.zoom.min, z));
-    try{
-      await videoTrack.applyConstraints({ advanced: [{ zoom: target }] });
-      els.pillZoom.textContent = `Zoom: ${target.toFixed(2)} (applyConstraints)`;
-      return true;
-    } catch(e){
-      console.warn("applyConstraints zoom failed", e);
-      return false;
-    }
+  async function flipCamera(){
+    facing = (facing === "environment") ? "user" : "environment";
+    await startCamera({ facingMode: facing });
   }
 
   async function selectCameraByDeviceId(deviceId){
     const opt = [...els.cameraSelect.options].find(o => o.value === deviceId);
     const label = (opt?.textContent || "").toLowerCase();
-
-    // Best-effort guess
     facing = (label.includes("front") || label.includes("vorne")) ? "user" : "environment";
     await startCamera({ deviceId, facingMode: facing });
   }
 
-  async function flipCamera(){
-    facing = (facing === 'environment') ? 'user' : 'environment';
-    await startCamera({ facingMode: facing });
-  }
-
-  function dataUrlToParts(dataUrl){
-    // "data:image/jpeg;base64,AAAA..."
-    const match = /^data:(.*?);base64,(.*)$/.exec(dataUrl);
-    if (!match) return { mime: "application/octet-stream", base64: "" };
-    return { mime: match[1], base64: match[2] };
-  }
-
-  function stripImagesFromRecords(records){
-    // remove photoBase64 to keep a small metadata file
-    return records.map(r => {
-      const copy = { ...r };
-      delete copy.photoBase64;
-      delete copy.photoMime;
-      delete copy.photoFile;
-      return copy;
-    });
-  }
-
-  function capturePhoto(){
-    if (!stream || !isPortrait()) return;
-
-    const captures = loadCaptures();
-    const id = nextId(captures);
-    const fileName = `photo_${padId(id)}.jpg`;
-
+  async function captureToBlob(){
     const v = els.video;
-    const canvas = document.createElement('canvas');
-
-    const w = v.videoWidth;
-    const h = v.videoHeight;
-    canvas.width = w;
-    canvas.height = h;
-
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(v, 0, 0, w, h);
-
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-    els.thumb.src = dataUrl;
-
-    // Download Foto sofort
-    const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = fileName;
-    a.click();
-
-    // cache photo for zip export while page open
-    photoCache.set(id, dataUrl);
-
-    // Metadaten record
-    const record = {
-      id,
-      ts: new Date().toISOString(),
-      heading: latest.heading,
-      yaw: latest.yaw,
-      pitch: latest.pitch,
-      roll: latest.roll
-    };
-
-    // Optional: Base64 in JSON/sessionStorage speichern (RIESIG)
-    if (els.chkBase64.checked){
-      const parts = dataUrlToParts(dataUrl);
-      record.photoFile = fileName;
-      record.photoMime = parts.mime;
-      record.photoBase64 = parts.base64;
-    }
-
-    captures.push(record);
-
-    try{
-      saveCaptures(captures);
-      setStatus(`Foto + Werte gespeichert: #${id}`);
-    } catch(e){
-      // sessionStorage quota exceeded etc.
-      console.warn(e);
-      setStatus("Speichern fehlgeschlagen (Storage voll?)");
-      // keep at least in memory cache; do not crash
-    }
+    const canvas = document.createElement("canvas");
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
   }
+
+  // -------------------------
+  // Sensor (Heading + Euler-ish)
+  // -------------------------
+  let latest = { heading:null, yaw:null, pitch:null, roll:null, ts:null };
 
   async function requestMotionPermission(){
-    // Must be called from user gesture (button click)
     let ok = false;
 
     try{
-      if (typeof DeviceOrientationEvent !== 'undefined' &&
-          typeof DeviceOrientationEvent.requestPermission === 'function') {
+      if (typeof DeviceOrientationEvent !== "undefined" &&
+          typeof DeviceOrientationEvent.requestPermission === "function") {
         const res = await DeviceOrientationEvent.requestPermission();
-        ok = (res === 'granted');
-      } else {
-        ok = true; // other browsers: no prompt needed
-      }
-    } catch(e){
-      console.warn("DeviceOrientationEvent permission error", e);
-    }
+        ok = (res === "granted");
+      } else ok = true;
+    } catch(e){ console.warn(e); }
 
     try{
-      if (typeof DeviceMotionEvent !== 'undefined' &&
-          typeof DeviceMotionEvent.requestPermission === 'function') {
+      if (typeof DeviceMotionEvent !== "undefined" &&
+          typeof DeviceMotionEvent.requestPermission === "function") {
         const res2 = await DeviceMotionEvent.requestPermission();
-        ok = ok && (res2 === 'granted');
+        ok = ok && (res2 === "granted");
       }
-    } catch(e){
-      console.warn("DeviceMotionEvent permission error", e);
-    }
+    } catch(e){ console.warn(e); }
 
     if (!ok){
       setStatus("Motion/Kompass abgelehnt");
@@ -531,56 +615,45 @@
 
     setStatus("Motion/Kompass aktiv");
 
-    window.addEventListener('deviceorientation', (ev) => {
-      // Heading: iOS Safari (non-standard) is often best if available
-      const heading = (typeof ev.webkitCompassHeading === 'number')
+    window.addEventListener("deviceorientation", (ev) => {
+      const heading = (typeof ev.webkitCompassHeading === "number")
         ? ev.webkitCompassHeading
-        : (typeof ev.alpha === 'number' ? ev.alpha : null);
+        : (typeof ev.alpha === "number" ? ev.alpha : null);
 
-      // pragmatic Euler-ish mapping:
-      // yaw ~ alpha, pitch ~ beta, roll ~ gamma
-      const yaw   = (typeof ev.alpha === 'number') ? ev.alpha : null;   // 0..360
-      const pitch = (typeof ev.beta  === 'number') ? ev.beta  : null;   // -180..180
-      const roll  = (typeof ev.gamma === 'number') ? ev.gamma : null;   // -90..90
+      const yaw   = (typeof ev.alpha === "number") ? ev.alpha : null;
+      const pitch = (typeof ev.beta  === "number") ? ev.beta  : null;
+      const roll  = (typeof ev.gamma === "number") ? ev.gamma : null;
 
-      latest.heading = heading;
-      latest.yaw = yaw;
-      latest.pitch = pitch;
-      latest.roll = roll;
-      latest.ts = Date.now();
+      latest = { heading, yaw, pitch, roll, ts: Date.now() };
 
       els.pillHeading.textContent = (heading == null) ? "Heading: —" : `Heading: ${heading.toFixed(0)}°`;
       els.pillYaw.textContent     = (yaw == null)     ? "Yaw: —"     : `Yaw: ${yaw.toFixed(0)}°`;
       els.pillPitch.textContent   = (pitch == null)   ? "Pitch: —"   : `Pitch: ${pitch.toFixed(0)}°`;
       els.pillRoll.textContent    = (roll == null)    ? "Roll: —"    : `Roll: ${roll.toFixed(0)}°`;
-    }, { passive: true });
+    }, { passive:true });
   }
 
   // -------------------------
-  // Fullscreen toggle
+  // Fullscreen
   // -------------------------
   function isFullscreen(){
     return !!(document.fullscreenElement || document.webkitFullscreenElement);
   }
-
   function updateFullscreenBtn(){
     els.btnFullscreen.textContent = isFullscreen() ? "Normal" : "Fullscreen";
   }
-
   async function enterFullscreen(){
     const el = document.documentElement;
     if (el.requestFullscreen) return el.requestFullscreen();
     if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
     throw new Error("Fullscreen API not supported");
   }
-
   async function exitFullscreen(){
     if (document.exitFullscreen) return document.exitFullscreen();
     if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
     throw new Error("Exit fullscreen not supported");
   }
-
-  els.btnFullscreen.addEventListener('click', async () => {
+  els.btnFullscreen.addEventListener("click", async () => {
     try{
       if (!isFullscreen()) await enterFullscreen();
       else await exitFullscreen();
@@ -591,137 +664,209 @@
       updateFullscreenBtn();
     }
   });
-
-  document.addEventListener('fullscreenchange', updateFullscreenBtn);
-  document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+  document.addEventListener("fullscreenchange", updateFullscreenBtn);
+  document.addEventListener("webkitfullscreenchange", updateFullscreenBtn);
 
   // -------------------------
-  // Zoom buttons: try zoom; fallback: heuristic device switch by label
+  // Capture flow (IndexedDB)
   // -------------------------
-  els.zoomRow.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.chip');
-    if (!btn) return;
+  async function takeShot(){
+    if (!stream || !isPortrait()) return;
 
-    const z = parseFloat(btn.dataset.z);
+    setStatus("Speichere…");
 
-    [...els.zoomRow.querySelectorAll('.chip')].forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    const zoomOk = await trySetZoom(z);
-    if (zoomOk) return;
-
-    const opts = [...els.cameraSelect.options];
-    const want = (z === 0.5) ? ['ultra', 'weit', 'wide', '0.5']
-               : (z >= 2) ? ['tele', '2', '3', '5']
-               : ['wide', '1', 'standard'];
-
-    const match = opts.find(o => want.some(k => (o.textContent || "").toLowerCase().includes(k)));
-    if (match){
-      setStatus("Wechsle Kamera (heuristisch) …");
-      await selectCameraByDeviceId(match.value);
-    } else {
-      setStatus("Zoom/Lens nicht verfügbar");
+    const blob = await captureToBlob();
+    if (!blob){
+      setStatus("Foto fehlgeschlagen");
+      return;
     }
-  });
+
+    // 1) create capture record (auto id)
+    const t = tx(["captures","photos"], "readwrite");
+    const capturesStore = t.objectStore("captures");
+    const photosStore = t.objectStore("photos");
+
+    const record = {
+      ts: new Date().toISOString(),
+      heading: latest.heading,
+      yaw: latest.yaw,
+      pitch: latest.pitch,
+      roll: latest.roll
+    };
+
+    let id;
+    try{
+      id = await idbAdd(capturesStore, record); // autoIncrement id returned
+      await idbPut(photosStore, { id, mime: "image/jpeg", blob });
+    } catch(e){
+      console.error(e);
+      setStatus("DB Fehler beim Speichern");
+      return;
+    }
+
+    // download file too (optional, nice for user)
+    const fname = photoFileName(id);
+    downloadBlob(fname, blob);
+
+    await refreshCount();
+    await updateLastUI();
+    setStatus(`Gespeichert: #${id}`);
+  }
 
   // -------------------------
-  // Exports
+  // Exports (from IndexedDB)
   // -------------------------
-  els.btnExportJson.addEventListener('click', () => {
-    const captures = loadCaptures();
-    downloadJson("captures.json", captures);
-  });
+  async function exportJson(){
+    const t = tx(["captures"], "readonly");
+    const records = await idbGetAll(t.objectStore("captures"));
+    records.sort((a,b)=>a.id-b.id);
+    downloadJson("captures.json", records);
 
-  els.btnExportZip.addEventListener('click', async () => {
-    const captures = loadCaptures();
-    if (captures.length === 0) return;
+    if (els.chkBase64Export.checked){
+      // create extra file with base64 images (can be huge)
+      setStatus("Erzeuge Base64 JSON…");
+      const t2 = tx(["photos"], "readonly");
+      const ps = t2.objectStore("photos");
 
+      const withB64 = [];
+      for (const r of records){
+        const p = await idbGet(ps, r.id);
+        if (p?.blob){
+          const b64 = await blobToBase64(p.blob);
+          withB64.push({
+            ...r,
+            photoFile: photoFileName(r.id),
+            photoMime: p.mime || "image/jpeg",
+            photoBase64: b64
+          });
+        } else {
+          withB64.push({ ...r });
+        }
+      }
+      downloadJson("captures_with_base64.json", withB64);
+      setStatus("JSON exportiert");
+    }
+  }
+
+  async function exportZip(){
     if (typeof JSZip === "undefined"){
-      setStatus("ZIP: JSZip nicht geladen");
+      setStatus("ZIP lib fehlt");
       return;
     }
 
     setStatus("ZIP wird erstellt…");
 
-    try{
-      const zip = new JSZip();
+    const t = tx(["captures","photos"], "readonly");
+    const captures = await idbGetAll(t.objectStore("captures"));
+    captures.sort((a,b)=>a.id-b.id);
 
-      // Always include both versions:
-      zip.file("captures.json", JSON.stringify(captures, null, 2));
-      zip.file("captures_no_images.json", JSON.stringify(stripImagesFromRecords(captures), null, 2));
+    const zip = new JSZip();
+    zip.file("captures.json", JSON.stringify(captures, null, 2));
 
-      const photosFolder = zip.folder("photos");
-      const missing = [];
+    const photosFolder = zip.folder("photos");
+    const photosStore = t.objectStore("photos");
 
-      for (const rec of captures){
-        const id = rec.id;
-        const fileName = rec.photoFile || `photo_${padId(id)}.jpg`;
-
-        // Prefer in-memory cache dataUrl, fallback to stored Base64 in record
-        let dataUrl = photoCache.get(id) || null;
-        let mime = null;
-        let base64 = null;
-
-        if (dataUrl){
-          const parts = dataUrlToParts(dataUrl);
-          mime = parts.mime;
-          base64 = parts.base64;
-        } else if (rec.photoBase64 && rec.photoMime){
-          mime = rec.photoMime;
-          base64 = rec.photoBase64;
-        }
-
-        if (base64){
-          // JSZip can take base64 directly
-          photosFolder.file(fileName, base64, { base64: true });
-        } else {
-          missing.push(`#${id} (${fileName})`);
-        }
+    // add images as binary blobs
+    for (const r of captures){
+      const p = await idbGet(photosStore, r.id);
+      if (p?.blob){
+        photosFolder.file(photoFileName(r.id), p.blob);
       }
+    }
 
-      if (missing.length){
-        zip.file("missing_photos.txt",
-          "Für diese Records war kein Foto verfügbar.\n" +
-          "Tipp: Entweder nicht neu laden (photoCache bleibt nur im RAM),\n" +
-          "oder Checkbox 'Foto als Base64 im JSON speichern' aktivieren.\n\n" +
-          missing.join("\n")
-        );
+    if (els.chkBase64Export.checked){
+      // optional extra base64 JSON in zip
+      const withB64 = [];
+      for (const r of captures){
+        const p = await idbGet(photosStore, r.id);
+        if (p?.blob){
+          const b64 = await blobToBase64(p.blob);
+          withB64.push({
+            ...r,
+            photoFile: photoFileName(r.id),
+            photoMime: p.mime || "image/jpeg",
+            photoBase64: b64
+          });
+        } else withB64.push({ ...r });
       }
+      zip.file("captures_with_base64.json", JSON.stringify(withB64, null, 2));
+    }
 
-      const blob = await zip.generateAsync({ type: "blob" });
-      downloadBlob("capture_export.zip", blob);
-      setStatus("ZIP exportiert");
-    } catch(e){
-      console.error(e);
-      setStatus("ZIP Fehler");
+    const blob = await zip.generateAsync({ type:"blob" });
+    downloadBlob("capture_export.zip", blob);
+    setStatus("ZIP exportiert");
+  }
+
+  async function clearDB(){
+    setStatus("Lösche DB…");
+    const t = tx(["captures","photos"], "readwrite");
+    await idbClear(t.objectStore("captures"));
+    await idbClear(t.objectStore("photos"));
+    await refreshCount();
+    await updateLastUI();
+    setStatus("DB gelöscht");
+  }
+
+  // -------------------------
+  // Zoom buttons
+  // -------------------------
+  els.zoomRow.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".chip");
+    if (!btn) return;
+
+    const z = parseFloat(btn.dataset.z);
+    [...els.zoomRow.querySelectorAll(".chip")].forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    // try zoom constraint
+    const ok = await trySetZoom(z);
+    if (ok) return;
+
+    // fallback heuristic switch by label (best effort)
+    const opts = [...els.cameraSelect.options];
+    const want = (z === 0.5) ? ["ultra","weit","wide","0.5"]
+               : (z >= 2) ? ["tele","2","3","5"]
+               : ["wide","1","standard"];
+    const match = opts.find(o => want.some(k => (o.textContent||"").toLowerCase().includes(k)));
+    if (match){
+      setStatus("Wechsle Kamera…");
+      await selectCameraByDeviceId(match.value);
+      setStatus("Kamera läuft");
+    } else {
+      setStatus("Zoom nicht verfügbar");
     }
   });
 
-  els.btnClear.addEventListener('click', () => {
-    sessionStorage.removeItem(STORE_KEY);
-    saveCaptures([]);
-    setStatus("Session gelöscht");
-  });
+  // -------------------------
+  // Bind UI actions
+  // -------------------------
+  els.btnStart.addEventListener("click", () => startCamera({ facingMode:facing }));
+  els.btnStop.addEventListener("click", stopCamera);
+  els.btnFlip.addEventListener("click", flipCamera);
+  els.btnShot.addEventListener("click", takeShot);
+  els.btnMotion.addEventListener("click", requestMotionPermission);
+  els.cameraSelect.addEventListener("change", () => selectCameraByDeviceId(els.cameraSelect.value));
+
+  els.btnExportJson.addEventListener("click", exportJson);
+  els.btnExportZip.addEventListener("click", exportZip);
+  els.btnClear.addEventListener("click", clearDB);
 
   // -------------------------
-  // UI events
+  // Init
   // -------------------------
-  els.btnStart.addEventListener('click', () => startCamera({ facingMode: facing }));
-  els.btnStop.addEventListener('click', stopCamera);
-  els.btnFlip.addEventListener('click', flipCamera);
-  els.btnShot.addEventListener('click', capturePhoto);
-  els.btnMotion.addEventListener('click', requestMotionPermission);
-
-  els.cameraSelect.addEventListener('change', async () => {
-    await selectCameraByDeviceId(els.cameraSelect.value);
-  });
-
-  // -------------------------
-  // init
-  // -------------------------
-  updatePortraitUI();
-  saveCaptures(loadCaptures());
-  updateFullscreenBtn();
+  (async () => {
+    try{
+      db = await openDB();
+      await refreshCount();
+      await updateLastUI();
+      updatePortraitUI();
+      updateFullscreenBtn();
+      setStatus("Bereit");
+    } catch(e){
+      console.error(e);
+      setStatus("IndexedDB nicht verfügbar");
+    }
+  })();
 })();
 </script>
 </body>
