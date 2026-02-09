@@ -12,7 +12,7 @@
     }
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;}
     body{margin:0;background:linear-gradient(180deg,#07080c, #0b0c10);color:var(--text);}
-    .wrap{max-width:560px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;}
+    .wrap{max-width:590px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;}
     header{padding:14px 14px 8px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
     .pill{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);padding:8px 10px;border-radius:999px;color:var(--muted);font-size:12px}
     .btn{
@@ -38,7 +38,7 @@
       position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:space-between;
       padding:10px;pointer-events:none;gap:10px;
     }
-    .hud{display:flex;flex-direction:column;gap:6px;min-width:140px}
+    .hud{display:flex;flex-direction:column;gap:6px;min-width:160px}
     .hud.right{align-items:flex-end;min-width:auto}
     .hud .pill{backdrop-filter:blur(10px);background:rgba(0,0,0,.35);border-color:rgba(255,255,255,.14);color:#d6dbf0}
     .portraitBlock{
@@ -59,7 +59,7 @@
     .row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
     select{
       background:rgba(255,255,255,.06);color:var(--text);border:1px solid rgba(255,255,255,.14);
-      border-radius:12px;padding:10px;min-width:230px;max-width:100%;
+      border-radius:12px;padding:10px;min-width:240px;max-width:100%;
     }
     .zoomRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
     .chip{
@@ -72,14 +72,28 @@
       background:rgba(255,255,255,.06);
     }
     .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    .toggle{
+      display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
+      padding:10px 12px;border-radius:16px;
+      width:100%;
+    }
+    .toggle input{transform:scale(1.15);}
     footer{padding:10px 14px 16px 14px;color:var(--muted);font-size:12px;line-height:1.35}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
   </style>
+
+  <!-- ZIP Library (JSZip) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
+
 <body>
 <div class="wrap">
   <header>
     <div class="pill" id="statusPill">Bereit</div>
+
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn" id="btnFullscreen">Fullscreen</button>
       <button class="btn" id="btnMotion">Gyro/Kompass aktivieren</button>
       <button class="btn danger" id="btnStop" disabled>Stop</button>
     </div>
@@ -138,20 +152,28 @@
         </div>
       </div>
 
+      <label class="toggle" title="Speichert das Foto zusätzlich als Base64 in sessionStorage/JSON. Kann sehr groß werden.">
+        <input type="checkbox" id="chkBase64" />
+        <div>
+          <div style="color:var(--text);font-weight:650">Foto als Base64 im JSON speichern</div>
+          <div style="margin-top:2px">Achtung: macht <code>sessionStorage</code> / JSON schnell riesig.</div>
+        </div>
+      </label>
+
       <div class="row">
         <button class="btn" id="btnExportJson" disabled>JSON export</button>
+        <button class="btn" id="btnExportZip" disabled>ZIP export</button>
         <button class="btn danger" id="btnClear" disabled>Session löschen</button>
       </div>
 
       <div class="pill" id="hint">
-        Hinweis: Auf iOS funktioniert 0,5x/2x/5x im Web nur, wenn Safari Zoom-Capabilities oder separate Kameras bereitstellt.
+        Hinweis: Auf iOS funktionieren 0,5x/2x/5x im Web nur, wenn Safari Zoom-Capabilities oder separate Kameras bereitstellt.
       </div>
     </div>
   </div>
 
   <footer>
-    Läuft am zuverlässigsten über <b>HTTPS</b>. iOS fragt Kamera-Permission beim Start an.
-    Motion/Kompass erfordern extra Button (iOS).
+    Für iOS am besten über <b>HTTPS</b>. Motion/Kompass brauchen Button-Klick. ZIP: <code>captures.json</code> + Fotos als Dateien.
   </footer>
 </div>
 
@@ -161,6 +183,7 @@
     video: document.getElementById('video'),
     viewfinder: document.getElementById('viewfinder'),
     portraitBlock: document.getElementById('portraitBlock'),
+
     statusPill: document.getElementById('statusPill'),
     pillOrientation: document.getElementById('pillOrientation'),
     pillHeading: document.getElementById('pillHeading'),
@@ -169,20 +192,30 @@
     pillRoll: document.getElementById('pillRoll'),
     pillZoom: document.getElementById('pillZoom'),
     pillCount: document.getElementById('pillCount'),
+
     cameraSelect: document.getElementById('cameraSelect'),
+
     btnStart: document.getElementById('btnStart'),
     btnStop: document.getElementById('btnStop'),
     btnShot: document.getElementById('btnShot'),
     btnFlip: document.getElementById('btnFlip'),
     btnMotion: document.getElementById('btnMotion'),
+    btnFullscreen: document.getElementById('btnFullscreen'),
+
     btnExportJson: document.getElementById('btnExportJson'),
+    btnExportZip: document.getElementById('btnExportZip'),
     btnClear: document.getElementById('btnClear'),
+
+    chkBase64: document.getElementById('chkBase64'),
+
     thumb: document.getElementById('thumb'),
     zoomRow: document.getElementById('zoomRow'),
     hint: document.getElementById('hint'),
   };
 
-  // ---- session storage ----
+  // -------------------------
+  // session storage
+  // -------------------------
   const STORE_KEY = "captures_v1";
 
   function loadCaptures(){
@@ -193,8 +226,9 @@
   function saveCaptures(arr){
     sessionStorage.setItem(STORE_KEY, JSON.stringify(arr));
     els.btnExportJson.disabled = arr.length === 0;
-    els.btnClear.disabled = arr.length === 0;
-    els.pillCount.textContent = `Records: ${arr.length}`;
+    els.btnExportZip.disabled  = arr.length === 0;
+    els.btnClear.disabled      = arr.length === 0;
+    els.pillCount.textContent  = `Records: ${arr.length}`;
   }
 
   function nextId(arr){
@@ -202,12 +236,10 @@
     return max + 1;
   }
 
-  function padId(id){
-    return String(id).padStart(4, "0");
-  }
+  function padId(id){ return String(id).padStart(4, "0"); }
 
-  function downloadJson(filename, obj){
-    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  // Download helpers
+  function downloadBlob(filename, blob){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -216,13 +248,26 @@
     URL.revokeObjectURL(url);
   }
 
-  // ---- camera state ----
+  function downloadJson(filename, obj){
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    downloadBlob(filename, blob);
+  }
+
+  // -------------------------
+  // camera state
+  // -------------------------
   let stream = null;
   let currentDeviceId = null;
   let facing = 'environment'; // 'user' | 'environment'
   let videoTrack = null;
 
-  // ---- latest sensor values ----
+  // Photo cache (in-memory) for ZIP exporting within the current page session.
+  // If you reload the page, only photos stored as Base64 in sessionStorage are still available.
+  const photoCache = new Map(); // id -> dataUrl
+
+  // -------------------------
+  // sensor values
+  // -------------------------
   let latest = {
     heading: null,
     yaw: null,
@@ -253,10 +298,10 @@
     const constraints = {
       audio: false,
       video: {
-        width: { ideal: 1280 },
+        width:  { ideal: 1280 },
         height: { ideal: 720 },
         facingMode: deviceId ? undefined : { ideal: facingMode },
-        deviceId: deviceId ? { exact: deviceId } : undefined
+        deviceId:  deviceId ? { exact: deviceId } : undefined
       }
     };
 
@@ -374,6 +419,24 @@
     await startCamera({ facingMode: facing });
   }
 
+  function dataUrlToParts(dataUrl){
+    // "data:image/jpeg;base64,AAAA..."
+    const match = /^data:(.*?);base64,(.*)$/.exec(dataUrl);
+    if (!match) return { mime: "application/octet-stream", base64: "" };
+    return { mime: match[1], base64: match[2] };
+  }
+
+  function stripImagesFromRecords(records){
+    // remove photoBase64 to keep a small metadata file
+    return records.map(r => {
+      const copy = { ...r };
+      delete copy.photoBase64;
+      delete copy.photoMime;
+      delete copy.photoFile;
+      return copy;
+    });
+  }
+
   function capturePhoto(){
     if (!stream || !isPortrait()) return;
 
@@ -395,13 +458,16 @@
     const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
     els.thumb.src = dataUrl;
 
-    // Download Foto
+    // Download Foto sofort
     const a = document.createElement('a');
     a.href = dataUrl;
     a.download = fileName;
     a.click();
 
-    // Metadaten speichern (JSON klein halten -> kein Foto in sessionStorage)
+    // cache photo for zip export while page open
+    photoCache.set(id, dataUrl);
+
+    // Metadaten record
     const record = {
       id,
       ts: new Date().toISOString(),
@@ -411,10 +477,25 @@
       roll: latest.roll
     };
 
-    captures.push(record);
-    saveCaptures(captures);
+    // Optional: Base64 in JSON/sessionStorage speichern (RIESIG)
+    if (els.chkBase64.checked){
+      const parts = dataUrlToParts(dataUrl);
+      record.photoFile = fileName;
+      record.photoMime = parts.mime;
+      record.photoBase64 = parts.base64;
+    }
 
-    setStatus(`Foto + Werte gespeichert: #${id}`);
+    captures.push(record);
+
+    try{
+      saveCaptures(captures);
+      setStatus(`Foto + Werte gespeichert: #${id}`);
+    } catch(e){
+      // sessionStorage quota exceeded etc.
+      console.warn(e);
+      setStatus("Speichern fehlgeschlagen (Storage voll?)");
+      // keep at least in memory cache; do not crash
+    }
   }
 
   async function requestMotionPermission(){
@@ -450,18 +531,17 @@
 
     setStatus("Motion/Kompass aktiv");
 
-    // Device orientation -> heading + euler-ish angles
     window.addEventListener('deviceorientation', (ev) => {
       // Heading: iOS Safari (non-standard) is often best if available
       const heading = (typeof ev.webkitCompassHeading === 'number')
         ? ev.webkitCompassHeading
         : (typeof ev.alpha === 'number' ? ev.alpha : null);
 
-      // Euler-ish mapping (pragmatic):
+      // pragmatic Euler-ish mapping:
       // yaw ~ alpha, pitch ~ beta, roll ~ gamma
-      const yaw   = (typeof ev.alpha === 'number') ? ev.alpha : null;  // 0..360
-      const pitch = (typeof ev.beta  === 'number') ? ev.beta  : null;  // -180..180
-      const roll  = (typeof ev.gamma === 'number') ? ev.gamma : null;  // -90..90
+      const yaw   = (typeof ev.alpha === 'number') ? ev.alpha : null;   // 0..360
+      const pitch = (typeof ev.beta  === 'number') ? ev.beta  : null;   // -180..180
+      const roll  = (typeof ev.gamma === 'number') ? ev.gamma : null;   // -90..90
 
       latest.heading = heading;
       latest.yaw = yaw;
@@ -474,10 +554,50 @@
       els.pillPitch.textContent   = (pitch == null)   ? "Pitch: —"   : `Pitch: ${pitch.toFixed(0)}°`;
       els.pillRoll.textContent    = (roll == null)    ? "Roll: —"    : `Roll: ${roll.toFixed(0)}°`;
     }, { passive: true });
-
   }
 
-  // Zoom buttons: try zoom; fallback: heuristic device switch by label (best-effort)
+  // -------------------------
+  // Fullscreen toggle
+  // -------------------------
+  function isFullscreen(){
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function updateFullscreenBtn(){
+    els.btnFullscreen.textContent = isFullscreen() ? "Normal" : "Fullscreen";
+  }
+
+  async function enterFullscreen(){
+    const el = document.documentElement;
+    if (el.requestFullscreen) return el.requestFullscreen();
+    if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
+    throw new Error("Fullscreen API not supported");
+  }
+
+  async function exitFullscreen(){
+    if (document.exitFullscreen) return document.exitFullscreen();
+    if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
+    throw new Error("Exit fullscreen not supported");
+  }
+
+  els.btnFullscreen.addEventListener('click', async () => {
+    try{
+      if (!isFullscreen()) await enterFullscreen();
+      else await exitFullscreen();
+    } catch(e){
+      console.warn(e);
+      setStatus("Fullscreen nicht verfügbar");
+    } finally {
+      updateFullscreenBtn();
+    }
+  });
+
+  document.addEventListener('fullscreenchange', updateFullscreenBtn);
+  document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+
+  // -------------------------
+  // Zoom buttons: try zoom; fallback: heuristic device switch by label
+  // -------------------------
   els.zoomRow.addEventListener('click', async (e) => {
     const btn = e.target.closest('.chip');
     if (!btn) return;
@@ -490,7 +610,6 @@
     const zoomOk = await trySetZoom(z);
     if (zoomOk) return;
 
-    // fallback: choose a camera that "looks like" the desired lens in label
     const opts = [...els.cameraSelect.options];
     const want = (z === 0.5) ? ['ultra', 'weit', 'wide', '0.5']
                : (z >= 2) ? ['tele', '2', '3', '5']
@@ -505,7 +624,88 @@
     }
   });
 
+  // -------------------------
+  // Exports
+  // -------------------------
+  els.btnExportJson.addEventListener('click', () => {
+    const captures = loadCaptures();
+    downloadJson("captures.json", captures);
+  });
+
+  els.btnExportZip.addEventListener('click', async () => {
+    const captures = loadCaptures();
+    if (captures.length === 0) return;
+
+    if (typeof JSZip === "undefined"){
+      setStatus("ZIP: JSZip nicht geladen");
+      return;
+    }
+
+    setStatus("ZIP wird erstellt…");
+
+    try{
+      const zip = new JSZip();
+
+      // Always include both versions:
+      zip.file("captures.json", JSON.stringify(captures, null, 2));
+      zip.file("captures_no_images.json", JSON.stringify(stripImagesFromRecords(captures), null, 2));
+
+      const photosFolder = zip.folder("photos");
+      const missing = [];
+
+      for (const rec of captures){
+        const id = rec.id;
+        const fileName = rec.photoFile || `photo_${padId(id)}.jpg`;
+
+        // Prefer in-memory cache dataUrl, fallback to stored Base64 in record
+        let dataUrl = photoCache.get(id) || null;
+        let mime = null;
+        let base64 = null;
+
+        if (dataUrl){
+          const parts = dataUrlToParts(dataUrl);
+          mime = parts.mime;
+          base64 = parts.base64;
+        } else if (rec.photoBase64 && rec.photoMime){
+          mime = rec.photoMime;
+          base64 = rec.photoBase64;
+        }
+
+        if (base64){
+          // JSZip can take base64 directly
+          photosFolder.file(fileName, base64, { base64: true });
+        } else {
+          missing.push(`#${id} (${fileName})`);
+        }
+      }
+
+      if (missing.length){
+        zip.file("missing_photos.txt",
+          "Für diese Records war kein Foto verfügbar.\n" +
+          "Tipp: Entweder nicht neu laden (photoCache bleibt nur im RAM),\n" +
+          "oder Checkbox 'Foto als Base64 im JSON speichern' aktivieren.\n\n" +
+          missing.join("\n")
+        );
+      }
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      downloadBlob("capture_export.zip", blob);
+      setStatus("ZIP exportiert");
+    } catch(e){
+      console.error(e);
+      setStatus("ZIP Fehler");
+    }
+  });
+
+  els.btnClear.addEventListener('click', () => {
+    sessionStorage.removeItem(STORE_KEY);
+    saveCaptures([]);
+    setStatus("Session gelöscht");
+  });
+
+  // -------------------------
   // UI events
+  // -------------------------
   els.btnStart.addEventListener('click', () => startCamera({ facingMode: facing }));
   els.btnStop.addEventListener('click', stopCamera);
   els.btnFlip.addEventListener('click', flipCamera);
@@ -516,23 +716,12 @@
     await selectCameraByDeviceId(els.cameraSelect.value);
   });
 
-  els.btnExportJson.addEventListener('click', () => {
-    const captures = loadCaptures();
-    downloadJson("captures.json", captures);
-  });
-
-  els.btnClear.addEventListener('click', () => {
-    sessionStorage.removeItem(STORE_KEY);
-    saveCaptures([]);
-    setStatus("Session gelöscht");
-  });
-
-  // Init
+  // -------------------------
+  // init
+  // -------------------------
   updatePortraitUI();
   saveCaptures(loadCaptures());
-
-  // Enable shot only when portrait + stream (handled in updatePortraitUI)
-  // Also update after camera starts
+  updateFullscreenBtn();
 })();
 </script>
 </body>
