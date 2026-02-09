@@ -1,0 +1,2495 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>4-Punkt ROI → Homographie → Kanten → CC → Subpixel + Kreis/Ellipse Fit (Vanilla JS)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    h2 { margin: 0 0 10px 0; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+    .panel { border: 1px solid #7775; border-radius: 12px; padding: 12px; min-width: 340px; }
+    canvas { border: 1px solid #7777; border-radius: 12px; max-width: 100%; height: auto; }
+    button, select, input { border-radius: 10px; border: 1px solid #7777; padding: 8px 10px; }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    label { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+    .hint { opacity: 0.85; font-size: 13px; line-height: 1.35; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; white-space: pre; }
+    .list { max-height: 240px; overflow: auto; border: 1px solid #7775; border-radius: 10px; padding: 10px; }
+    .ok { color: #2a7; }
+    .warn { color: #c83; }
+    .badge { display:inline-block; padding:2px 8px; border:1px solid #7777; border-radius:999px; font-size:12px; opacity:.9; }
+    .grid { display:grid; gap:10px; }
+    .two { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  
+    /* --- Centroid Tabelle + Auswahl --- */
+    .ctable { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; }
+    .ctable th, .ctable td { padding: 6px 8px; border-bottom: 1px solid #7775; text-align: left; }
+    .ctable thead th { position: sticky; top: 0; background: color-mix(in oklab, Canvas 92%, transparent); backdrop-filter: blur(6px); }
+    .ctable tbody tr:hover { background: color-mix(in oklab, CanvasText 8%, transparent); }
+    .ctable tbody tr.selected { background: rgba(0,255,120,0.12); }
+    .ctable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .ctable td.sel { width: 1%; white-space: nowrap; }
+    .ctable input[type="checkbox"] { width: 16px; height: 16px; accent-color: #00ff78; }
+
+    .outWrap { max-height: 240px; overflow: auto; border: 1px solid #7775; border-radius: 10px; padding: 10px; }
+    .outSummary { white-space: pre; margin: 0 0 10px 0; opacity: .9; }
+
+  
+    .mini { padding: 4px 8px; font-size: 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+  <h2>4-Punkt ROI → Homographie Warp → robuste Kanten → CC → (Subpixel) + Kreis/Ellipse-Fit (Vanilla JS)</h2>
+
+  <div class="row">
+    <div class="panel" style="flex: 1 1 640px;">
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <label style="gap:8px;">
+          Load images:
+          <input id="file" type="file" accept="image/*" multiple />
+        </label>
+
+        <button id="btnClear" disabled>Clear ROI points</button>
+        <button id="btnRun" disabled>Compute centroids</button>
+        <span class="badge" id="roiState">ROI: 0/4</span>
+        <button id="btnPrevImg" disabled>prev</button>
+        <button id="btnNextImg" disabled>next</button>
+        <span class="badge" id="imgState">Image: 0/0</span>
+      </div>
+
+      <div class="hint" style="margin-top:10px;">
+        (1) Load images · (2) Click 4 ROI points (around the area) · (3) Compute. <br/>
+        Note: Detection uses the raw image (offscreen) – ROI labels/markers do not affect the warp.
+      </div>
+
+      <div style="margin-top:10px;">
+        <canvas id="main"></canvas>
+      </div>
+
+      <div class="two" style="margin-top:10px;">
+        <div>
+          <div class="hint" style="margin:0 0 6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;"><span>Warped ROI (Front-View)</span><label style="font-size:12px; opacity:0.9;"><input type="checkbox" id="chkViewFlipH" checked> Flip H</label><label style="font-size:12px; opacity:0.9;"><input type="checkbox" id="chkViewFlipV"> Flip V</label><button id="btnViewFlipReset" class="mini" type="button">Reset View</button></div>
+          <canvas id="warp"></canvas>
+        </div>
+        <div>
+          <div class="hint" style="margin:0 0 6px 0;">Debug (Edges / Binary)</div>
+          <canvas id="dbg"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex: 1 1 420px;">
+      <h3 style="margin:0 0 10px 0;">Parameter</h3>
+
+      <div class="grid">
+        <label>
+          Max. Bildbreite (Downscale):
+          <input id="maxW" type="number" min="400" max="4000" value="1400" />
+        </label>
+
+        <label>
+          Warp-Breite (px):
+          <input id="warpW" type="number" min="300" max="2400" value="900" />
+        </label>
+
+        <label>
+          Vor-Blur (Box 3×3):
+          <select id="blur">
+            <option value="0">Aus</option>
+            <option value="1" selected>An</option>
+          </select>
+        </label>
+
+        <!-- ✅ NUR MANUELLER THRESHOLD -->
+        <label>
+          Kanten-Threshold (0..255):
+          <input id="thrManual" type="number" min="0" max="255" value="25" />
+        </label>
+
+        <label>
+          CC Min Pixels:
+          <input id="minPix" type="number" min="5" max="200000" value="60" />
+        </label>
+
+        <label>
+          CC Max Pixels:
+          <input id="maxPix" type="number" min="5" max="400000" value="20000" />
+        </label>
+
+        <label>
+          Box Min (px):
+          <input id="minBox" type="number" min="2" max="500" value="8" />
+        </label>
+
+        <label>
+          Box Max (px):
+          <input id="maxBox" type="number" min="5" max="1500" value="140" />
+        </label>
+
+        <label>
+          Min. Radius (px):
+          <input id="minR" type="number" min="0" max="2000" value="8" />
+        </label>
+
+        <label>
+          Refinement:
+          <select id="refine">
+            <option value="none">Kein (nur Subpixel Centroid)</option>
+            <option value="circle" selected>Kreisfit (Kåsa, schnell)</option>
+            <option value="ellipse">Ellipsenfit (Fitzgibbon, genauer)</option>
+          </select>
+        </label>
+
+        <label>
+          Fit: Sample Punkte:
+          <input id="fitSample" type="number" min="30" max="2000" value="250" />
+        </label>
+
+        <label>
+          Debug Ansicht:
+          <select id="dbgMode">
+            <option value="edges" selected>Edge Strength</option>
+            <option value="binary">Binary Edges</option>
+          </select>
+        </label>
+      </div>
+
+      <h3 style="margin:14px 0 8px 0;">Status</h3>
+      <div id="status" class="hint mono">No image loaded yet.</div>
+
+      <h3 style="margin:14px 0 8px 0;">Centroids (original image coords)</h3>
+      
+      <div class="outWrap" id="out">
+        <div class="outSummary mono" id="outSummary"></div>
+        <table class="ctable" id="centroidTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th class="num">x</th>
+              <th class="num">y</th>
+              <th class="sel">Select</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+        <button id="btnDeleteCentroids" disabled>Delete</button>
+        <button id="btnImportCentroids" disabled>Import JSON</button>
+        <button id="btnExportCentroids" disabled>Export Table To JSON</button>
+        <button id="btnImportIndexDB" disabled>Import JSON To Index</button>
+        <button id="btnImportTargetData">Import Target Data</button>
+        <button id="btnSortByTarget" disabled>Sort Table by Target</button>
+        <button id="btnSortByConnection" disabled>Sort Table by Connection</button>
+                <button id="btnDeleteConnections" disabled>Delete connections</button>
+<label style="display:flex; gap:6px; align-items:center; padding:6px 8px; border:1px solid #7775; border-radius:10px;">
+          <input id="chkShowCentroidIds" type="checkbox" />
+          IDs anzeigen
+        </label>
+        <span id="targetState" style="align-self:center; opacity:0.85;">Target: (none)</span>
+        <input id="importTargetJson" type="file" accept=".json,application/json" style="display:none" />
+
+        <button id="btnSaveCentroids" disabled>Save to Index</button>
+        <button id="btnExportIndexDB" disabled>Save Index To JSON</button>
+        <input id="importJson" type="file" accept="application/json" style="display:none" />
+        <input id="importIndexJson" type="file" accept="application/json" style="display:none" />
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---------- DOM ----------
+  const main = document.getElementById('main');
+  const warpC = document.getElementById('warp');
+  const dbgC  = document.getElementById('dbg');
+
+  const mctx = main.getContext('2d', { willReadFrequently: true });
+  const wctx = warpC.getContext('2d', { willReadFrequently: true });
+  const dctx = dbgC.getContext('2d',  { willReadFrequently: true });
+
+  // Offscreen canvas for raw image (no overlays)
+  const srcCanvas = document.createElement('canvas');
+  const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+
+  const fileEl = document.getElementById('file');
+  const btnClear = document.getElementById('btnClear');
+  const btnRun   = document.getElementById('btnRun');
+  const btnPrevImg = document.getElementById('btnPrevImg');
+  const btnNextImg = document.getElementById('btnNextImg');
+  const imgStateEl = document.getElementById('imgState');
+
+  const roiState = document.getElementById('roiState');
+  const statusEl = document.getElementById('status');
+  const outEl    = document.getElementById('out');
+  const outSummaryEl = document.getElementById('outSummary');
+  const ctBody   = document.querySelector('#centroidTable tbody');
+
+  // Centroid actions
+  const btnDeleteCentroids = document.getElementById('btnDeleteCentroids');
+  const btnImportCentroids = document.getElementById('btnImportCentroids');
+  const importJsonEl = document.getElementById('importJson');
+  const btnExportCentroids = document.getElementById('btnExportCentroids');
+  const btnSaveCentroids   = document.getElementById('btnSaveCentroids');
+  const btnExportIndexDB   = document.getElementById('btnExportIndexDB');
+  const btnImportIndexDB  = document.getElementById('btnImportIndexDB');
+  const importIndexJsonEl = document.getElementById('importIndexJson');
+  // Target data (Asym Circle JSON)
+  const btnImportTargetData = document.getElementById('btnImportTargetData');
+  const importTargetJsonEl = document.getElementById('importTargetJson');
+  const btnSortByTarget = document.getElementById('btnSortByTarget');
+  const btnSortByConnection = document.getElementById('btnSortByConnection');
+  const btnDeleteConnections = document.getElementById('btnDeleteConnections');
+  const chkShowCentroidIds = document.getElementById('chkShowCentroidIds');
+  const chkViewFlipH = document.getElementById('chkViewFlipH');
+  const chkViewFlipV = document.getElementById('chkViewFlipV');
+  const btnViewFlipReset = document.getElementById('btnViewFlipReset');
+
+  const targetStateEl = document.getElementById('targetState');
+
+  // UI: show centroid IDs (0..n-1) next to points
+  let showCentroidIds = false;
+  // --- Warp click reordering (connections) ---
+  const warpBaseCanvas = document.createElement('canvas');
+  const warpBaseCtx = warpBaseCanvas.getContext('2d', { willReadFrequently: true });
+
+  let lastCentroidsRaw = null;         // original detected order (objects with stable .id)
+  let lastWarpCentroids = null;        // centroids in warp coords, each has {id,x,y,r}
+  let lastWarpW = 0, lastWarpH = 0;    // warp canvas size
+
+  let manualSequenceIds = [];          // user-defined order by clicking centroids in warp view
+  let manualOverrideActive = false;
+
+  // --- View mirror controls for Warp + Debug (CSS transforms) ---
+  // Default: horizontal mirror ON (fixes most camera/ROI orientations), vertical OFF.
+  // User can toggle both (and we persist it).
+  let viewFlipH = true;
+  let viewFlipV = false;
+
+  function applyViewFlip() {
+    const sx = viewFlipH ? -1 : 1;
+    const sy = viewFlipV ? -1 : 1;
+    const t = `scale(${sx},${sy})`;
+    if (warpC) { warpC.style.transform = t; warpC.style.transformOrigin = 'center center'; }
+    if (dbgC)  { dbgC.style.transform  = t; dbgC.style.transformOrigin  = 'center center'; }
+  }
+
+  function ensureCentroidIds(arr) {
+    if (!Array.isArray(arr)) return arr;
+    arr.forEach((p, i) => {
+      if (p && (p.id === undefined || p.id === null)) p.id = i;
+    });
+    return arr;
+  }
+
+  function resetConnections(restoreRaw = true) {
+    manualSequenceIds = [];
+    manualOverrideActive = false;
+    if (btnDeleteConnections) btnDeleteConnections.disabled = true;
+    if (btnSortByConnection) btnSortByConnection.disabled = true;
+
+    if (restoreRaw && Array.isArray(lastCentroidsRaw) && lastCentroidsRaw.length) {
+      // restore original detection order
+      lastCentroidsMain = lastCentroidsRaw.slice();
+      renderCentroidTable(lastCentroidsMain, lastSummaryText, null);
+      drawMain({ centroids: lastCentroidsMain, quad: true });
+      updateCentroidActionButtons();
+    }
+    redrawWarpView();
+  }
+
+  function normalizeQuadLandscape(q) {
+    // Ensure the warped result is landscape (width >= height) by rotating quad if necessary.
+    // q is TL,TR,BR,BL in canvas coords.
+    const topLen = Math.hypot(q[1].x-q[0].x, q[1].y-q[0].y);
+    const botLen = Math.hypot(q[2].x-q[3].x, q[2].y-q[3].y);
+    const leftLen = Math.hypot(q[3].x-q[0].x, q[3].y-q[0].y);
+    const rightLen= Math.hypot(q[2].x-q[1].x, q[2].y-q[1].y);
+    const avgW = (topLen + botLen) * 0.5;
+    const avgH = (leftLen + rightLen) * 0.5;
+    if (avgH > avgW) {
+      // rotate 90°: BL becomes TL
+      return [q[3], q[0], q[1], q[2]];
+    }
+    return q;
+  }
+
+
+  const CENTROIDS_STORAGE_KEY = 'centroids_by_image_v1';
+
+  const maxWEl = document.getElementById('maxW');
+  const warpWEl = document.getElementById('warpW');
+  const blurEl = document.getElementById('blur');
+
+  // ✅ nur manuell
+  const thrManualEl = document.getElementById('thrManual');
+
+  const minPixEl = document.getElementById('minPix');
+  const maxPixEl = document.getElementById('maxPix');
+  const minBoxEl = document.getElementById('minBox');
+  const maxBoxEl = document.getElementById('maxBox');
+  const minREl = document.getElementById('minR');
+
+  const refineEl = document.getElementById('refine');
+  const fitSampleEl = document.getElementById('fitSample');
+  const dbgModeEl = document.getElementById('dbgMode');
+
+  function setStatus(msg, cls="") {
+    statusEl.className = `hint mono ${cls}`.trim();
+    statusEl.textContent = msg;
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // Toggle centroid ID overlay
+  if (chkShowCentroidIds) {
+    showCentroidIds = !!chkShowCentroidIds.checked;
+    chkShowCentroidIds.addEventListener('change', () => {
+      showCentroidIds = !!chkShowCentroidIds.checked;
+      // Redraw immediately
+      if (imgLoaded) {
+        drawMain({ centroids: lastCentroidsMain, quad: true, pulseIndex: selectedIdx, now: performance.now() });
+      }
+
+  // --- Warp/Debug view flip controls (CSS mirror) ---
+  // Load persisted state (if any)
+  try {
+    const sH = localStorage.getItem('viewFlipH');
+    const sV = localStorage.getItem('viewFlipV');
+    if (sH !== null) viewFlipH = (sH === '1');
+    if (sV !== null) viewFlipV = (sV === '1');
+  } catch {}
+
+  if (chkViewFlipH) chkViewFlipH.checked = !!viewFlipH;
+  if (chkViewFlipV) chkViewFlipV.checked = !!viewFlipV;
+
+  function syncViewFlipFromUI() {
+    if (chkViewFlipH) viewFlipH = !!chkViewFlipH.checked;
+    if (chkViewFlipV) viewFlipV = !!chkViewFlipV.checked;
+    try {
+      localStorage.setItem('viewFlipH', viewFlipH ? '1' : '0');
+      localStorage.setItem('viewFlipV', viewFlipV ? '1' : '0');
+    } catch {}
+    applyViewFlip();
+  }
+
+  if (chkViewFlipH) chkViewFlipH.addEventListener('change', () => { syncViewFlipFromUI(); redrawWarpView(); });
+  if (chkViewFlipV) chkViewFlipV.addEventListener('change', () => { syncViewFlipFromUI(); redrawWarpView(); });
+
+  if (btnViewFlipReset) {
+    btnViewFlipReset.addEventListener('click', () => {
+      if (chkViewFlipH) chkViewFlipH.checked = true;
+      if (chkViewFlipV) chkViewFlipV.checked = false;
+      syncViewFlipFromUI();
+      redrawWarpView();
+    });
+  }
+
+  // Apply initial transform
+  applyViewFlip();
+
+      redrawWarpView();
+    });
+  }
+
+  // ---------- Image + ROI ----------
+  let img = new Image();
+  let imgLoaded = false;
+
+  // current image metadata (for export / import check)
+  let currentImageTitel = "";
+  let currentImageType = "";
+
+  // Multi-image: list + index
+  const images = []; // { titel, type, img, roiPts, centroids, summary }
+  let currentIndex = -1;
+
+  function imageKey(titel, type) {
+    return `${titel || ""}||${type || ""}`;
+  }
+
+  function currentRec() {
+    return (currentIndex >= 0 && currentIndex < images.length) ? images[currentIndex] : null;
+  }
+
+  // points in main canvas coords (für das aktuelle Bild)
+  let roiPts = []; // [{x,y}, ... length 0..4]
+
+  // last results + selection state (für das aktuelle Bild)
+  let lastCentroidsMain = null;
+  let lastSummaryText = "";
+  let selectedIdx = null;
+  let pulseRAF = 0;
+
+
+  // Target data loaded via JSON (optional)
+  let targetData = null; // { meta, settings, points: [{index,i,j,grid?,page?}, ...] }
+
+  // scale: image->canvas
+  let scale = 1;
+
+  function saveCurrentStateToRec() {
+    const rec = currentRec();
+    if (!rec) return;
+    rec.roiPts = roiPts.slice();
+    rec.centroids = Array.isArray(lastCentroidsMain)
+      ? exportCentroidsWithIds(lastCentroidsMain)
+      : null;
+    rec.summary = lastSummaryText || "";
+  }
+
+  function setCurrentRecFromIndex(idx) {
+    if (idx < 0 || idx >= images.length) return;
+
+    // save previous state
+    saveCurrentStateToRec();
+
+    currentIndex = idx;
+    const rec = images[currentIndex];
+
+    img = rec.img;
+    imgLoaded = true;
+
+    currentImageTitel = rec.titel || "";
+    currentImageType = rec.type || "";
+
+    // Canvas fit + raw draw
+    const maxW = clamp(parseInt(maxWEl.value || "1400", 10), 400, 4000);
+    fitImageToCanvas(maxW);
+    drawRawToSrc();
+
+    // ROI / results from record
+    const restoredItem = restoreItemFor(currentImageTitel, currentImageType);
+    roiPts = (Array.isArray(rec.roiPts) && rec.roiPts.length === 4)
+      ? rec.roiPts.slice()
+      : ((restoredItem && Array.isArray(restoredItem.roiPts) && restoredItem.roiPts.length === 4)
+          ? restoredItem.roiPts.slice()
+          : []);
+    updateRoiState();
+
+    // Centroids: record wins, otherwise try session store
+    const restored = rec.centroids || (restoredItem ? restoredItem.centroids : null);
+    if (restored && Array.isArray(restored) && restored.length) {
+      lastCentroidsMain = restored
+        .map((p, idx) => ({ x: Number(p.x), y: Number(p.y), id: (p.id ?? idx) }))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+      lastSummaryText = rec.summary || `(${lastCentroidsMain.length} Centroids aus Sitzung loaded)`;
+      renderCentroidTable(lastCentroidsMain, lastSummaryText);
+      drawMain({ centroids: lastCentroidsMain, quad: true });
+    } else {
+      lastCentroidsMain = null;
+      lastSummaryText = "";
+      renderCentroidTable([], "");
+      drawMain({ centroids: null, quad: true });
+    }
+
+    setSelectedIndex(null);
+    stopPulse();
+
+    // Warp/Debug leeren (pro Bild neu rechnen)
+    warpC.width = 2; warpC.height = 2; wctx.clearRect(0, 0, 2, 2);
+    dbgC.width = 2; dbgC.height = 2; dctx.clearRect(0, 0, 2, 2);
+    // reset manual connection ordering when switching images
+    lastCentroidsRaw = Array.isArray(lastCentroidsMain) ? lastCentroidsMain.slice() : null;
+    resetConnections(false);
+
+    btnClear.disabled = false;
+    btnRun.disabled = false;
+
+    updateImageNavUI();
+    updateCentroidActionButtons();
+
+    setStatus(`Loaded image ${currentIndex + 1}/${images.length}. Please click 4 ROI points.`, "ok");
+  }
+
+  function updateImageNavUI() {
+    const n = images.length;
+    imgStateEl.textContent = `Image: ${n ? (currentIndex + 1) : 0}/${n}`;
+    btnPrevImg.disabled = !(n > 1 && currentIndex > 0);
+    btnNextImg.disabled = !(n > 1 && currentIndex < n - 1);
+  }
+
+  function fitImageToCanvas(maxW) {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const targetW = Math.min(maxW, w);
+    scale = targetW / w;
+
+    const cw = Math.round(w * scale);
+    const ch = Math.round(h * scale);
+
+    main.width  = cw;
+    main.height = ch;
+
+    srcCanvas.width = cw;
+    srcCanvas.height = ch;
+  }
+
+  // zeichnet NUR das Bild in srcCanvas
+  function drawRawToSrc() {
+    srcCtx.clearRect(0,0,srcCanvas.width,srcCanvas.height);
+    srcCtx.drawImage(img, 0, 0, img.naturalWidth*scale, img.naturalHeight*scale);
+  }
+
+  function drawMain(overlays = { centroids: null, quad: true }) {
+    if (!imgLoaded) {
+      main.width = 900; main.height = 520;
+      mctx.clearRect(0,0,main.width,main.height);
+      mctx.fillText("Bild laden …", 20, 30);
+      return;
+    }
+
+    mctx.clearRect(0,0,main.width,main.height);
+    mctx.drawImage(img, 0, 0, img.naturalWidth*scale, img.naturalHeight*scale);
+
+    // ROI points + quad
+    if (overlays.quad) {
+      for (let i = 0; i < roiPts.length; i++) {
+        const p = roiPts[i];
+        mctx.save();
+        mctx.fillStyle = 'rgba(0,255,180,0.95)';
+        mctx.beginPath(); mctx.arc(p.x, p.y, 5, 0, Math.PI*2); mctx.fill();
+        mctx.fillStyle = 'rgba(0,0,0,0.65)';
+        mctx.fillRect(p.x+7, p.y-10, 18, 16);
+        mctx.fillStyle = 'rgba(255,255,255,0.95)';
+        mctx.fillText(String(i+1), p.x+12, p.y+2);
+        mctx.restore();
+      }
+      if (roiPts.length === 4) {
+        const q = sortQuadTLTRBRBL(roiPts);
+        mctx.save();
+        mctx.strokeStyle = 'rgba(0,255,180,0.95)';
+        mctx.lineWidth = 2;
+        mctx.setLineDash([6,4]);
+        mctx.beginPath();
+        mctx.moveTo(q[0].x, q[0].y);
+        mctx.lineTo(q[1].x, q[1].y);
+        mctx.lineTo(q[2].x, q[2].y);
+        mctx.lineTo(q[3].x, q[3].y);
+        mctx.closePath();
+        mctx.stroke();
+        mctx.fillStyle = 'rgba(0,255,180,0.12)';
+        mctx.fill();
+        mctx.restore();
+      }
+    }
+
+    // ✅ im Originalbild Centroid-Punkte + (optional) ausgewählter Centroid pulsiert grün
+    if (overlays.centroids) {
+      const now = overlays.now ?? performance.now();
+
+      // alle Zentren (rot, klein)
+      mctx.save();
+      mctx.fillStyle = 'rgba(255,64,64,0.95)';
+      overlays.centroids.forEach((c, i) => {
+        mctx.beginPath();
+        mctx.arc(c.x, c.y, 2.2, 0, Math.PI*2);
+        mctx.fill();
+
+        // optional: draw centroid IDs (0..n-1)
+        if (showCentroidIds) {
+          const label = String((c.displayId ?? c.id ?? i));
+          mctx.font = '12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+          mctx.textBaseline = 'middle';
+          // stroke for contrast
+          mctx.lineWidth = 3;
+          mctx.strokeStyle = 'rgba(0,0,0,0.75)';
+          mctx.strokeText(label, c.x + 8, c.y - 8);
+          mctx.fillStyle = 'rgba(255,255,255,0.95)';
+          mctx.fillText(label, c.x + 8, c.y - 8);
+          // restore fillStyle for dots
+          mctx.fillStyle = 'rgba(255,64,64,0.95)';
+        }
+      });
+      mctx.restore();
+
+      // ausgewähltes Zentrum (grün, pulsierend)
+      const idx = overlays.pulseIndex;
+      if (idx != null && overlays.centroids[idx]) {
+        const c = overlays.centroids[idx];
+        const s = 0.5 + 0.5 * Math.sin(now / 180); // 0..1
+        const r = 6 + 8 * s;                       // 6..14
+        const a = 0.25 + 0.35 * s;                 // 0.25..0.60
+
+        mctx.save();
+        mctx.strokeStyle = 'rgba(0,255,120,0.95)';
+        mctx.lineWidth = 2;
+        mctx.beginPath(); mctx.arc(c.x, c.y, r, 0, Math.PI*2); mctx.stroke();
+
+        mctx.fillStyle = `rgba(0,255,120,${a})`;
+        mctx.beginPath(); mctx.arc(c.x, c.y, r, 0, Math.PI*2); mctx.fill();
+
+        mctx.fillStyle = 'rgba(0,255,120,0.95)';
+        mctx.beginPath(); mctx.arc(c.x, c.y, 3.0, 0, Math.PI*2); mctx.fill();
+        mctx.restore();
+      }
+    }
+  }
+
+  function updateRoiState() {
+    roiState.textContent = `ROI: ${roiPts.length}/4`;
+    updateTargetUI();
+  }
+
+  function stopPulse() {
+    if (pulseRAF) cancelAnimationFrame(pulseRAF);
+    pulseRAF = 0;
+  }
+
+  function pulseLoop() {
+    if (!imgLoaded) { stopPulse(); return; }
+    if (selectedIdx == null || !lastCentroidsMain) { stopPulse(); return; }
+    drawMain({ centroids: lastCentroidsMain, quad: true, pulseIndex: selectedIdx, now: performance.now() });
+    pulseRAF = requestAnimationFrame(pulseLoop);
+  }
+
+  function setSelectedIndex(idx) {
+    // idx: number | null
+    selectedIdx = (idx === null || idx === undefined) ? null : idx;
+
+    // Checkbox exklusiv
+    const boxes = ctBody.querySelectorAll('input[type="checkbox"][data-idx]');
+    boxes.forEach(b => {
+      const bIdx = Number(b.dataset.idx);
+      b.checked = (selectedIdx !== null && bIdx === selectedIdx);
+    });
+
+    // Row highlight
+    ctBody.querySelectorAll('tr[data-idx]').forEach(tr => {
+      const tIdx = Number(tr.dataset.idx);
+      tr.classList.toggle('selected', selectedIdx !== null && tIdx === selectedIdx);
+    });
+
+    // Animation starten/stoppen
+    if (selectedIdx !== null) {
+      if (!pulseRAF) pulseLoop();
+    } else {
+      stopPulse();
+      // einmal normal neu zeichnen (ohne Puls)
+      if (imgLoaded && lastCentroidsMain) drawMain({ centroids: lastCentroidsMain, quad: true });
+    }
+  }
+
+  function renderCentroidTable(centroidsMain, summaryText, keepSelected = null) {
+    // summaryText kann beim Reorder gleich bleiben
+    if (summaryText !== undefined && summaryText !== null) outSummaryEl.textContent = summaryText;
+
+    // Table body
+    ctBody.innerHTML = "";
+    // Keep display IDs in sync with current table order (0..n-1)
+    centroidsMain.forEach((p, i) => { p.displayId = i; });
+    // Sync display IDs into warp centroids (same stable .id)
+    if (Array.isArray(lastWarpCentroids) && Array.isArray(centroidsMain)) {
+      const map = new Map(centroidsMain.map((c) => [c.id, c.displayId]));
+      lastWarpCentroids.forEach(c => { c.displayId = map.get(c.id); });
+    }
+
+    centroidsMain.slice(0, 500).forEach((p, i) => {
+      const tr = document.createElement('tr');
+      tr.dataset.idx = String(i);
+
+      const tdN = document.createElement('td');
+      tdN.textContent = String(i + 1);
+
+      const tdX = document.createElement('td');
+      tdX.className = "num";
+      tdX.textContent = p.x.toFixed(3);
+
+      const tdY = document.createElement('td');
+      tdY.className = "num";
+      tdY.textContent = p.y.toFixed(3);
+
+      const tdS = document.createElement('td');
+      tdS.className = "sel";
+      const cb = document.createElement('input');
+      cb.type = "checkbox";
+      cb.dataset.idx = String(i);
+      tdS.appendChild(cb);
+
+      tr.appendChild(tdN);
+      tr.appendChild(tdX);
+      tr.appendChild(tdY);
+      tr.appendChild(tdS);
+      ctBody.appendChild(tr);
+    });
+
+    // Auswahl beibehalten (falls gültig)
+    const ks = (keepSelected !== null && keepSelected !== undefined &&
+                keepSelected >= 0 && keepSelected < centroidsMain.length)
+               ? keepSelected : null;
+    setSelectedIndex(ks);
+     updateTargetUI();
+  }
+
+  // Event-Delegation: nur eine Checkbox gleichzeitig
+  ctBody.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement)) return;
+    if (t.type !== "checkbox") return;
+
+    const idx = Number(t.dataset.idx);
+    if (t.checked) setSelectedIndex(idx);
+    else setSelectedIndex(null);
+  });
+
+
+// Keyboard: ausgewählte Zeile (Checkbox=true) mit ↑/↓ verschieben (nur eine Auswahl möglich)
+function moveSelectedRow(dir) {
+  if (selectedIdx == null) return;
+  if (!lastCentroidsMain || lastCentroidsMain.length === 0) return;
+
+  const from = selectedIdx;
+  const to = from + dir;
+  if (to < 0 || to >= lastCentroidsMain.length) return;
+
+  // Element im Array verschieben (Swap mit Nachbar)
+  const tmp = lastCentroidsMain[from];
+  lastCentroidsMain[from] = lastCentroidsMain[to];
+  lastCentroidsMain[to] = tmp;
+
+  // Tabelle neu rendern + Auswahl auf neuer Position behalten
+  renderCentroidTable(lastCentroidsMain, lastSummaryText, to);
+
+  // Sichtbar halten
+  requestAnimationFrame(() => {
+    const tr = ctBody.querySelector('tr.selected');
+    if (tr) tr.scrollIntoView({ block: 'nearest' });
+  });
+
+  updateCentroidActionButtons();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (selectedIdx == null) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+  // Nicht in Parameter-Inputs "reinfunken" (Number/Select/Text etc.)
+  const ae = document.activeElement;
+  const tag = ae?.tagName?.toLowerCase?.() || "";
+  if (tag === "textarea" || tag === "select") return;
+  if (tag === "input") {
+    const t = (ae instanceof HTMLInputElement) ? (ae.type || "").toLowerCase() : "";
+    if (t !== "checkbox") return; // z.B. number/file/text → ignorieren
+  }
+
+  e.preventDefault();
+  moveSelectedRow(e.key === 'ArrowUp' ? -1 : 1);
+});
+
+
+
+// ---------- Target JSON import + sorting ----------
+btnImportTargetData.addEventListener('click', () => {
+  importTargetJsonEl.value = "";
+  importTargetJsonEl.click();
+});
+
+importTargetJsonEl.addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || "null"));
+      const v = validateTargetJson(parsed);
+      if (!v) throw new Error("bad target json schema");
+      targetData = v;
+      updateTargetUI();
+      setStatus(`Target JSON geladen (${v.points.length} Punkte).`, "ok");
+    } catch (err) {
+      console.error(err);
+      targetData = null;
+      updateTargetUI();
+      setStatus("Target JSON ungültig (erwartet: { points:[{index, grid{x,y} oder page{x,y}}...] }).", "warn");
+    }
+  };
+  reader.readAsText(f);
+});
+
+btnSortByTarget.addEventListener('click', () => {
+  if (!targetData || !Array.isArray(targetData.points) || !targetData.points.length) {
+    setStatus("Kein Target geladen.", "warn"); return;
+  }
+  if (!Array.isArray(lastCentroidsMain) || !lastCentroidsMain.length) {
+    setStatus("Keine Centroids in der Tabelle.", "warn"); return;
+  }
+  if (!imgLoaded || !Array.isArray(roiPts) || roiPts.length !== 4) {
+    setStatus("Bitte erst 4 ROI Punkte setzen.", "warn"); return;
+  }
+
+  const H = computeCurrentHForTarget();
+  if (!H) { setStatus("Homographie für Target-Sort konnte nicht berechnet werden.", "warn"); return; }
+
+  const { sorted, info } = sortCentroidsByTarget(lastCentroidsMain, H, targetData.points);
+
+  lastCentroidsMain = sorted;
+
+  let extra = "";
+  if (info) {
+    extra = `Target sort: matched ${info.matched}/${Math.min(info.detected, info.expected)} ` +
+            `(mean≈${info.meanWarpPx?.toFixed(2)} px, max≈${info.maxWarpPx?.toFixed(2)} px)\\n`;
+  }
+  lastSummaryText = (lastSummaryText || "") + extra;
+
+  renderCentroidTable(lastCentroidsMain, lastSummaryText);
+  drawMain({ centroids: lastCentroidsMain, quad: true });
+
+  const rec = currentRec();
+  if (rec) { rec.centroids = exportCentroidsWithIds(lastCentroidsMain); rec.summary = lastSummaryText; }
+
+  updateTargetUI();
+  setStatus("Tabelle nach Target sortiert.", "ok");
+});
+
+// ---------- Centroid: SessionStorage (pro Bild) + Export + Import + Delete ----------
+function readCentroidStore() {
+  const raw = sessionStorage.getItem(CENTROIDS_STORAGE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function ensureCentroidStore() {
+  const s = readCentroidStore();
+  if (s && typeof s === "object") {
+    if (!s.items || typeof s.items !== "object") s.items = {};
+    return s;
+  }
+  return { version: 2, savedAt: null, items: {} };
+}
+
+function writeCentroidStore(store) {
+  sessionStorage.setItem(CENTROIDS_STORAGE_KEY, JSON.stringify(store));
+}
+
+
+// Auto-save: append/update current image entry in session index store (without wiping others)
+function autoSaveCurrentToIndex(centroidsMain) {
+  if (!Array.isArray(centroidsMain) || centroidsMain.length === 0) return;
+  const t = currentImageTitel || "";
+  const ty = currentImageType || "";
+  // still allow saving even if type is empty; key will include titel
+  if (!t && !ty) return;
+
+  const store = ensureCentroidStore();
+  const k = imageKey(t, ty);
+
+  store.savedAt = new Date().toISOString();
+  store.items[k] = {
+    titel: t,
+    type: ty,
+    savedAt: store.savedAt,
+    roiPts: currentRoiQuadOrEmpty(),
+    centroids: exportCentroidsWithIds(centroidsMain)
+  };
+
+  writeCentroidStore(store);
+}
+
+function storeHasAny() {
+  const s = readCentroidStore();
+  return !!(s && s.items && Object.keys(s.items).length);
+}
+
+function restoreItemFor(titel, type) {
+  const s = readCentroidStore();
+  if (!s || !s.items) return null;
+  const k = imageKey(titel, type);
+  const it = s.items[k];
+  if (!it || typeof it !== "object") return null;
+
+  const centroids = Array.isArray(it.centroids) ? it.centroids : null;
+  const roiPtsStored = Array.isArray(it.roiPts) ? it.roiPts : null;
+
+  return { centroids, roiPts: roiPtsStored };
+}
+
+// Backward compat (falls irgendwo noch genutzt)
+function restoreCentroidsFor(titel, type) {
+  const it = restoreItemFor(titel, type);
+  return it && Array.isArray(it.centroids) ? it.centroids : null;
+}
+
+function updateCentroidActionButtons() {
+  const hasTableData = Array.isArray(lastCentroidsMain) && lastCentroidsMain.length > 0;
+  btnSaveCentroids.disabled = !hasTableData;
+  btnExportCentroids.disabled = !hasTableData;
+  btnImportCentroids.disabled = !imgLoaded; // single-image import only when an image is active
+  btnImportIndexDB.disabled = !(images.length > 0); // index import only after images are loaded
+  const any = storeHasAny();
+  btnDeleteCentroids.disabled = !any;
+  btnExportIndexDB.disabled = !any;
+  updateTargetUI();
+}
+
+function clearCurrentCentroidsUI() {
+  lastCentroidsMain = null;
+  lastSummaryText = "";
+  renderCentroidTable([], "");
+  setSelectedIndex(null);
+  stopPulse();
+  if (imgLoaded) drawMain({ centroids: null, quad: true });
+  updateCentroidActionButtons();
+}
+
+function clearAllStoredCentroids() {
+  sessionStorage.removeItem(CENTROIDS_STORAGE_KEY);
+  // auch in den loadeden Records leeren
+  for (const rec of images) {
+    rec.centroids = null;
+    rec.summary = "";
+  }
+}
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2500);
+}
+
+
+function currentRoiQuadOrEmpty() {
+  if (Array.isArray(roiPts) && roiPts.length === 4) {
+    // immer in konsistenter Reihenfolge save
+    return sortQuadTLTRBRBL(roiPts).map(p => ({ x: p.x, y: p.y }));
+  }
+  return [];
+}
+
+
+// --- IDs + Export Order ---
+// WICHTIG: Interne centroid.id bleibt stabil (aus Detektion). Für Tabelle/Export nutzen wir displayId (= aktuelle Reihenfolge).
+function syncDisplayIdsFromCurrentOrder(centroidsMain) {
+  if (!Array.isArray(centroidsMain)) return;
+  centroidsMain.forEach((c, i) => { c.displayId = i; });
+
+  // Sync displayId into warp centroids (so drawn labels follow table order)
+  if (Array.isArray(lastWarpCentroids) && lastWarpCentroids.length) {
+    const map = new Map(centroidsMain.map(c => [c.id, c.displayId]));
+    lastWarpCentroids.forEach(c => { c.displayId = map.get(c.id); });
+  }
+}
+
+function exportCentroidsWithIds(centroidsMain) {
+  if (!Array.isArray(centroidsMain)) return [];
+  // ensure displayId matches current array order
+  syncDisplayIdsFromCurrentOrder(centroidsMain);
+  return centroidsMain.map((p, i) => ({
+    id: Number.isFinite(Number(p.displayId)) ? Number(p.displayId) : i,
+    x: Number(p.x),
+    y: Number(p.y)
+  })).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+}
+
+// Ensure current image is written into the store using the CURRENT table order + ids
+function upsertCurrentImageIntoStore(store) {
+  if (!store || typeof store !== "object") return store;
+  if (!store.items || typeof store.items !== "object") store.items = {};
+  if (!Array.isArray(lastCentroidsMain) || !lastCentroidsMain.length) return store;
+
+  const t = currentImageTitel || "";
+  const ty = currentImageType || "";
+  if (!t && !ty) return store;
+
+  const k = imageKey(t, ty);
+  store.savedAt = new Date().toISOString();
+  store.items[k] = {
+    titel: t,
+    type: ty,
+    savedAt: store.savedAt,
+    roiPts: currentRoiQuadOrEmpty(),
+    centroids: exportCentroidsWithIds(lastCentroidsMain)
+  };
+  return store;
+}
+
+
+btnSaveCentroids.addEventListener('click', () => {
+  if (!Array.isArray(lastCentroidsMain) || lastCentroidsMain.length === 0) return;
+  const rec = currentRec();
+  if (!rec) return;
+
+  const store = ensureCentroidStore();
+  const k = imageKey(currentImageTitel, currentImageType);
+
+  store.savedAt = new Date().toISOString();
+  store.items[k] = {
+    titel: currentImageTitel || "",
+    type: currentImageType || "",
+    savedAt: store.savedAt,
+    roiPts: currentRoiQuadOrEmpty(),
+    centroids: exportCentroidsWithIds(lastCentroidsMain)
+  };
+
+  writeCentroidStore(store);
+
+  // Record updaten
+  rec.centroids = exportCentroidsWithIds(lastCentroidsMain);
+  rec.roiPts = currentRoiQuadOrEmpty();
+  rec.summary = `(${rec.centroids.length} Centroids gespeichert)`;
+
+  updateCentroidActionButtons();
+  setStatus("Centroids im Sitzungsspeicher gespeichert (Save to Index).", "ok");
+});
+
+btnExportCentroids.addEventListener('click', () => {
+  if (!Array.isArray(lastCentroidsMain) || lastCentroidsMain.length === 0) return;
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    titel: currentImageTitel || "",
+    type: currentImageType || "",
+    roiPts: currentRoiQuadOrEmpty(),
+    centroids: exportCentroidsWithIds(lastCentroidsMain).map((p, i) => ({ index: i + 1, id: p.id, x: p.x, y: p.y }))
+  };
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  downloadJSON(payload, `centroids_${stamp}.json`);
+  setStatus("JSON exported.", "ok");
+});
+
+btnExportIndexDB.addEventListener('click', () => {
+  // ensure the CURRENT image state (incl. manual sort order) is in the store before exporting
+  let store = readCentroidStore();
+  store = ensureCentroidStore();
+  store = upsertCurrentImageIntoStore(store);
+
+  if (!store || !store.items || !Object.keys(store.items).length) {
+    setStatus("IndexDB is empty – nothing to export.", "warn");
+    updateCentroidActionButtons();
+    return;
+  }
+
+  // sanitize all items: guarantee {id,x,y} and numeric values
+  const itemsOut = {};
+  for (const k of Object.keys(store.items)) {
+    const it = store.items[k] || {};
+    const cents = Array.isArray(it.centroids) ? it.centroids : [];
+    itemsOut[k] = {
+      ...it,
+      centroids: cents
+        .map((p, i) => ({
+          id: Number.isFinite(Number(p?.id)) ? Number(p.id) : i,
+          x: Number(p?.x),
+          y: Number(p?.y)
+        }))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+    };
+  }
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    version: store.version ?? 2,
+    savedAt: store.savedAt ?? null,
+    items: itemsOut
+  };
+
+  // write back sanitized store too (optional but keeps session consistent)
+  try { writeCentroidStore({ ...store, items: itemsOut }); } catch {}
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  downloadJSON(payload, `indexDB_${stamp}.json`);
+  setStatus("IndexDB als JSON exported (mit ids + aktueller Sortierung).", "ok");
+});
+
+
+
+
+// IMPORT (IndexDB): replace session storage with imported JSON (filtered by loaded images)
+btnImportIndexDB.addEventListener('click', () => {
+  if (!images.length) return;
+  importIndexJsonEl.value = "";
+  importIndexJsonEl.click();
+});
+
+importIndexJsonEl.addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || "null"));
+      if (!parsed || typeof parsed !== "object") throw new Error("bad json");
+
+      // Build set of allowed image keys from the currently loaded images
+      const allowed = new Set(images.map(r => imageKey(r.titel, r.type)));
+
+      // Start fresh: clear store, then import
+      sessionStorage.removeItem(CENTROIDS_STORAGE_KEY);
+      const store = { version: 2, savedAt: new Date().toISOString(), items: {} };
+
+      let imported = 0;
+      let skipped = 0;
+
+      const ingestOne = (obj) => {
+        const t = String(obj?.titel ?? "");
+        const ty = String(obj?.type ?? "");
+        const key = imageKey(t, ty);
+        if (!t || !ty || !allowed.has(key)) { skipped++; return; }
+
+        const roi = Array.isArray(obj?.roiPts) ? obj.roiPts.slice(0, 4).map(p => ({
+          x: Number(p?.x), y: Number(p?.y)
+        })) : null;
+
+        const cents = Array.isArray(obj?.centroids)
+          ? obj.centroids
+              .map((p, i) => ({
+                id: Number.isFinite(Number(p?.id)) ? Number(p.id) : i,
+                x: Number(p?.x),
+                y: Number(p?.y)
+              }))
+              .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+          : [];
+
+        store.items[key] = {
+          titel: t,
+          type: ty,
+          savedAt: new Date().toISOString(),
+          roiPts: (roi && roi.length === 4 && roi.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) ? roi : null,
+          centroids: cents
+        };
+        imported++;
+      };
+
+      if (parsed.items && typeof parsed.items === "object" && !Array.isArray(parsed.items)) {
+        for (const k of Object.keys(parsed.items)) ingestOne(parsed.items[k]);
+      } else if (Array.isArray(parsed.items)) {
+        // tolerate an array-based "items"
+        for (const it of parsed.items) ingestOne(it);
+      } else if (parsed.centroids && parsed.titel && parsed.type) {
+        // tolerate single-image export format
+        ingestOne(parsed);
+      } else {
+        throw new Error("unsupported json schema");
+      }
+
+      sessionStorage.setItem(CENTROIDS_STORAGE_KEY, JSON.stringify(store));
+
+      // Also push imported data into the in-memory image records so the current UI refresh works immediately.
+      for (const rec of images) {
+        const key = imageKey(rec.titel, rec.type);
+        const it = store.items[key];
+        if (it) {
+          rec.roiPts = Array.isArray(it.roiPts) ? it.roiPts.slice() : null;
+          rec.centroids = Array.isArray(it.centroids) ? it.centroids.map((p,i) => ({ id: (p.id ?? i), x: p.x, y: p.y })) : null;
+        } else {
+          rec.roiPts = rec.roiPts ?? null;
+          rec.centroids = rec.centroids ?? null;
+        }
+      }
+
+      // Refresh current image view (without losing imported preference)
+      if (currentIndex >= 0) {
+        // Clear transient UI state so restore-from-store works consistently
+        lastCentroidsMain = null;
+        setSelectedIndex(null);
+        // Prefer record values (now updated from imported store)
+        setCurrentRecFromIndex(currentIndex);
+      }
+
+      setStatus(`Index imported (${imported})${skipped ? `, skipped (${skipped})` : ""}.`, imported ? "ok" : "warn");
+      updateCentroidActionButtons();
+    } catch (err) {
+      console.error(err);
+      setStatus("Invalid JSON (Index import).", "warn");
+    }
+  };
+  reader.readAsText(f);
+});
+
+
+// IMPORT (single image): only accept JSON if titel+type match the current image
+btnImportCentroids.addEventListener('click', () => {
+  if (!imgLoaded) return;
+  importJsonEl.value = "";
+  importJsonEl.click();
+});
+
+importJsonEl.addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || "null"));
+      if (!parsed || typeof parsed !== "object") throw new Error("bad json");
+
+      const jt = String(parsed.titel ?? "");
+      const ty = String(parsed.type ?? "");
+      const arr = parsed.centroids;
+
+      if (jt !== (currentImageTitel || "") || ty !== (currentImageType || "")) {
+        setStatus(
+          `Import abgelehnt: JSON gehört zu "${jt}" (${ty}) – aktuelles Bild ist "${currentImageTitel}" (${currentImageType}).`,
+          "warn"
+        );
+        return;
+      }
+
+      if (!Array.isArray(arr)) {
+        setStatus("Import abgelehnt: 'centroids' ist kein Array.", "warn");
+        return;
+      }
+
+      const imported = arr
+        .map((p, i) => ({
+          id: Number.isFinite(Number(p?.id)) ? Number(p.id) : i,
+          x: Number(p?.x),
+          y: Number(p?.y)
+        }))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+
+      // optional: ROI Punkte importieren (wenn vorhanden)
+      const roiArr = parsed.roiPts;
+      if (Array.isArray(roiArr) && roiArr.length === 4) {
+        const cleanedRoi = roiArr
+          .map(p => ({ x: Number(p.x), y: Number(p.y) }))
+          .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+        if (cleanedRoi.length === 4) {
+          roiPts = cleanedRoi;
+          updateRoiState();
+        }
+      }
+
+      lastCentroidsMain = imported;
+      lastSummaryText = `(${imported.length} Centroids importiert)`;
+      renderCentroidTable(imported, lastSummaryText);
+      setSelectedIndex(null);
+      stopPulse();
+      drawMain({ centroids: lastCentroidsMain, quad: true });
+
+      // im aktuellen Record merken (aber NICHT automatisch in session save)
+      const rec = currentRec();
+      if (rec) { rec.centroids = imported.map(p => ({...p})); rec.roiPts = currentRoiQuadOrEmpty(); rec.summary = lastSummaryText; }
+
+      updateCentroidActionButtons();
+      setStatus("JSON importiert. (Optional: Save to Index zum Speichern in SessionStorage)", "ok");
+    } catch {
+      setStatus("Import fehlgeschlagen: ungültige JSON-Datei.", "warn");
+    }
+  };
+  reader.readAsText(f);
+});
+
+btnDeleteCentroids.addEventListener('click', () => {
+  clearAllStoredCentroids();
+  clearCurrentCentroidsUI();
+  setStatus("Sitzungsspeicher-Eintrag(e) gelöscht.", "warn");
+});
+function canvasPoint(evt) {
+    const rect = main.getBoundingClientRect();
+    const x = (evt.clientX - rect.left) * (main.width / rect.width);
+    const y = (evt.clientY - rect.top)  * (main.height / rect.height);
+    return { x, y };
+  }
+
+  // ---------- Quad sorting (TL,TR,BR,BL) ----------
+  function sortQuadTLTRBRBL(pts) {
+    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+
+    const withAng = pts.map(p => ({...p, ang: Math.atan2(p.y - cy, p.x - cx)}));
+    withAng.sort((a,b) => a.ang - b.ang);
+
+    let tlIdx = 0, best = Infinity;
+    for (let i=0;i<4;i++){
+      const s = withAng[i].x + withAng[i].y;
+      if (s < best) { best = s; tlIdx = i; }
+    }
+    const rot = [];
+    for (let i=0;i<4;i++) rot.push(withAng[(tlIdx+i)%4]);
+
+    const TL = rot[0], TR = rot[1], BR = rot[2], BL = rot[3];
+    const cross = (TR.x - TL.x)*(BL.y - TL.y) - (TR.y - TL.y)*(BL.x - TL.x);
+    if (cross > 0) return [TL, BL, BR, TR].map(p => ({x:p.x, y:p.y}));
+    return [TL, TR, BR, BL].map(p => ({x:p.x, y:p.y}));
+  }
+
+  // ---------- Linear solver (Gaussian elimination) ----------
+  function solveLinearSystem(A, b) {
+    const n = b.length;
+    const M = new Array(n);
+    for (let i=0;i<n;i++){ M[i] = A[i].slice(); M[i].push(b[i]); }
+
+    for (let col=0; col<n; col++) {
+      let pivot = col;
+      let maxAbs = Math.abs(M[col][col]);
+      for (let r=col+1; r<n; r++){
+        const v = Math.abs(M[r][col]);
+        if (v > maxAbs) { maxAbs = v; pivot = r; }
+      }
+      if (maxAbs < 1e-12) return null;
+      if (pivot !== col) { const tmp = M[col]; M[col] = M[pivot]; M[pivot] = tmp; }
+
+      const diag = M[col][col];
+      for (let c=col; c<=n; c++) M[col][c] /= diag;
+
+      for (let r=0; r<n; r++){
+        if (r===col) continue;
+        const f = M[r][col];
+        if (Math.abs(f) < 1e-15) continue;
+        for (let c=col; c<=n; c++) M[r][c] -= f * M[col][c];
+      }
+    }
+    const x = new Array(n);
+    for (let i=0;i<n;i++) x[i] = M[i][n];
+    return x;
+
+    // After table update, refresh warp view so on-canvas IDs reflect table order
+    if (showCentroidIds) redrawWarpView();
+
+  }
+
+  // ---------- Homography ----------
+  function homographyFrom4(src, dst) {
+    const A = [];
+    const b = [];
+    for (let i=0;i<4;i++){
+      const x = src[i].x, y = src[i].y;
+      const u = dst[i].x, v = dst[i].y;
+      A.push([ x, y, 1, 0, 0, 0, -u*x, -u*y ]); b.push(u);
+      A.push([ 0, 0, 0, x, y, 1, -v*x, -v*y ]); b.push(v);
+    }
+    const h = solveLinearSystem(A, b);
+    if (!h) return null;
+    return [ h[0],h[1],h[2], h[3],h[4],h[5], h[6],h[7],1 ];
+  }
+
+  function invert3x3(H) {
+    const a=H[0], b=H[1], c=H[2],
+          d=H[3], e=H[4], f=H[5],
+          g=H[6], h=H[7], i=H[8];
+
+    const A = (e*i - f*h);
+    const B = -(d*i - f*g);
+    const C = (d*h - e*g);
+    const D = -(b*i - c*h);
+    const E = (a*i - c*g);
+    const F = -(a*h - b*g);
+    const G = (b*f - c*e);
+    const Hc = -(a*f - c*d);
+    const I = (a*e - b*d);
+
+    const det = a*A + b*B + c*C;
+    if (Math.abs(det) < 1e-12) return null;
+    const invDet = 1/det;
+
+    return [ A*invDet, D*invDet, G*invDet,
+             B*invDet, E*invDet, Hc*invDet,
+             C*invDet, F*invDet, I*invDet ];
+  }
+
+  function applyH(H, x, y) {
+    const X = H[0]*x + H[1]*y + H[2];
+    const Y = H[3]*x + H[4]*y + H[5];
+    const W = H[6]*x + H[7]*y + H[8];
+    return { x: X / W, y: Y / W };
+  }
+
+
+  // ---------- Target (Asym circles) helpers ----------
+  function validateTargetJson(parsed) {
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!Array.isArray(parsed.points)) return null;
+
+    const pts = parsed.points
+      .map(p => ({
+        index: Number(p.index),
+        i: Number(p.i),
+        j: Number(p.j),
+        grid: (p.grid && typeof p.grid === "object") ? { x: Number(p.grid.x), y: Number(p.grid.y) } : null,
+        page: (p.page && typeof p.page === "object") ? { x: Number(p.page.x), y: Number(p.page.y) } : null,
+      }))
+      .filter(p => Number.isFinite(p.index) &&
+        ((p.grid && Number.isFinite(p.grid.x) && Number.isFinite(p.grid.y)) ||
+         (p.page && Number.isFinite(p.page.x) && Number.isFinite(p.page.y))));
+
+    if (!pts.length) return null;
+
+    // always order by index (this is the "target order": left->right, top->bottom)
+    pts.sort((a, b) => a.index - b.index);
+
+    return { meta: parsed.meta || null, settings: parsed.settings || null, points: pts };
+  }
+
+  function norm01(v, vmin, vmax) {
+    const d = (vmax - vmin);
+    return d > 1e-9 ? (v - vmin) / d : 0.5;
+  }
+
+  // Greedy assignment (small N): sorts pairs by distance and assigns unique i<->j
+  function matchByNearestPairs(det, exp) {
+    const pairs = [];
+    for (let i = 0; i < det.length; i++) {
+      for (let j = 0; j < exp.length; j++) {
+        const dx = det[i].x - exp[j].x;
+        const dy = det[i].y - exp[j].y;
+        const d2 = dx*dx + dy*dy;
+        pairs.push({ d2, i, j });
+      }
+    }
+    pairs.sort((a, b) => a.d2 - b.d2);
+
+    const detUsed = new Array(det.length).fill(false);
+    const expUsed = new Array(exp.length).fill(false);
+    const mapExpToDet = new Array(exp.length).fill(-1);
+
+    for (const p of pairs) {
+      if (detUsed[p.i] || expUsed[p.j]) continue;
+      detUsed[p.i] = true;
+      expUsed[p.j] = true;
+      mapExpToDet[p.j] = p.i;
+      if (detUsed.every(Boolean) || expUsed.every(Boolean)) break;
+    }
+    return mapExpToDet;
+  }
+
+  function sortCentroidsByTarget(centroidsMain, H, targetPts) {
+    if (!Array.isArray(centroidsMain) || !centroidsMain.length) return { sorted: centroidsMain, info: null };
+    if (!H || !Array.isArray(targetPts) || !targetPts.length) return { sorted: centroidsMain, info: null };
+
+    // 1) Detected points -> warp coords (so perspective/rotation is normalized)
+    const detWarp = centroidsMain.map(p => applyH(H, p.x, p.y));
+
+    // 2) Expected points -> use grid coords if present (stable), else page coords
+    const expRaw = targetPts.map(p => (p.grid ? { x: p.grid.x, y: p.grid.y } : { x: p.page.x, y: p.page.y }));
+
+    // Normalize both to 0..1 (robust to scale)
+    let dMinX = Infinity, dMaxX = -Infinity, dMinY = Infinity, dMaxY = -Infinity;
+    for (const p of detWarp) { dMinX = Math.min(dMinX, p.x); dMaxX = Math.max(dMaxX, p.x); dMinY = Math.min(dMinY, p.y); dMaxY = Math.max(dMaxY, p.y); }
+    let eMinX = Infinity, eMaxX = -Infinity, eMinY = Infinity, eMaxY = -Infinity;
+    for (const p of expRaw) { eMinX = Math.min(eMinX, p.x); eMaxX = Math.max(eMaxX, p.x); eMinY = Math.min(eMinY, p.y); eMaxY = Math.max(eMaxY, p.y); }
+
+    const detN = detWarp.map(p => ({ x: norm01(p.x, dMinX, dMaxX), y: norm01(p.y, dMinY, dMaxY) }));
+    const expN = expRaw.map(p => ({ x: norm01(p.x, eMinX, eMaxX), y: norm01(p.y, eMinY, eMaxY) }));
+
+    // 3) Match (expected order) -> detected index
+    const mapExpToDet = matchByNearestPairs(detN, expN);
+
+    // 4) Build sorted list in expected order
+    const sorted = [];
+    const usedDet = new Array(centroidsMain.length).fill(false);
+    for (let j = 0; j < mapExpToDet.length; j++) {
+      const i = mapExpToDet[j];
+      if (i >= 0 && i < centroidsMain.length) {
+        sorted.push(centroidsMain[i]);
+        usedDet[i] = true;
+      }
+    }
+    // Append leftovers (if counts differ)
+    for (let i = 0; i < centroidsMain.length; i++) if (!usedDet[i]) sorted.push(centroidsMain[i]);
+
+    // 5) Quality stats in warp pixels (only for matched ones)
+    const dists = [];
+    for (let j = 0; j < mapExpToDet.length; j++) {
+      const i = mapExpToDet[j];
+      if (i < 0 || i >= detWarp.length) continue;
+
+      // expected normalized -> convert back to det warp bbox for a pixel-ish distance
+      const ex = dMinX + expN[j].x * (dMaxX - dMinX);
+      const ey = dMinY + expN[j].y * (dMaxY - dMinY);
+      const dx = detWarp[i].x - ex;
+      const dy = detWarp[i].y - ey;
+      dists.push(Math.hypot(dx, dy));
+    }
+
+    const info = {
+      expected: targetPts.length,
+      detected: centroidsMain.length,
+      matched: dists.length,
+      meanWarpPx: dists.length ? (dists.reduce((a,b)=>a+b,0)/dists.length) : null,
+      maxWarpPx: dists.length ? Math.max(...dists) : null,
+    };
+
+    return { sorted, info };
+  }
+
+  function updateTargetUI() {
+    const n = targetData && Array.isArray(targetData.points) ? targetData.points.length : 0;
+    targetStateEl.textContent = n ? `Target: loaded (${n} points)` : "Target: (none)";
+    const hasTableData = Array.isArray(lastCentroidsMain) && lastCentroidsMain.length > 0;
+    btnSortByTarget.disabled = !(n && hasTableData && imgLoaded && Array.isArray(roiPts) && roiPts.length === 4);
+  }
+
+  function computeCurrentHForTarget() {
+    if (!imgLoaded) return null;
+    if (!Array.isArray(roiPts) || roiPts.length !== 4) return null;
+
+    let quad = sortQuadTLTRBRBL(roiPts);
+    quad = normalizeQuadLandscape(quad);
+    const warpW = clamp(parseInt(warpWEl.value || "900", 10), 300, 2400);
+
+    const topLen = Math.hypot(quad[1].x-quad[0].x, quad[1].y-quad[0].y);
+    const botLen = Math.hypot(quad[2].x-quad[3].x, quad[2].y-quad[3].y);
+    const leftLen = Math.hypot(quad[3].x-quad[0].x, quad[3].y-quad[0].y);
+    const rightLen= Math.hypot(quad[2].x-quad[1].x, quad[2].y-quad[1].y);
+    const avgW = (topLen + botLen) * 0.5;
+    const avgH = (leftLen + rightLen) * 0.5;
+    const warpH = Math.max(200, Math.round(warpW * (avgH / Math.max(1, avgW))));
+
+    const dst = [
+      {x:0, y:0},
+      {x:warpW-1, y:0},
+      {x:warpW-1, y:warpH-1},
+      {x:0, y:warpH-1}
+    ];
+
+    return homographyFrom4(quad, dst);
+  }
+
+  // ---------- Grayscale + warp sampling ----------
+  function imageDataToGray(imgData) {
+    const { data, width, height } = imgData;
+    const gray = new Uint8Array(width*height);
+    for (let i=0, p=0; i<data.length; i+=4, p++){
+      const r=data[i], g=data[i+1], b=data[i+2];
+      gray[p] = (0.299*r + 0.587*g + 0.114*b) | 0;
+    }
+    return gray;
+  }
+
+  function bilinearSampleGray(gray, w, h, x, y) {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = x0 + 1, y1 = y0 + 1;
+    if (x0 < 0 || y0 < 0 || x1 >= w || y1 >= h) return 0;
+
+    const fx = x - x0, fy = y - y0;
+    const i00 = gray[y0*w + x0];
+    const i10 = gray[y0*w + x1];
+    const i01 = gray[y1*w + x0];
+    const i11 = gray[y1*w + x1];
+
+    const a = i00*(1-fx) + i10*fx;
+    const b = i01*(1-fx) + i11*fx;
+    return a*(1-fy) + b*fy;
+  }
+
+  // ---------- Blur ----------
+  function boxBlur3(gray, w, h) {
+    const tmp = new Uint16Array(w*h);
+    const out = new Uint8Array(w*h);
+    for (let y=0;y<h;y++){
+      const row = y*w;
+      for (let x=0;x<w;x++){
+        const xm = Math.max(0, x-1);
+        const xp = Math.min(w-1, x+1);
+        tmp[row+x] = gray[row+xm] + gray[row+x] + gray[row+xp];
+      }
+    }
+    for (let y=0;y<h;y++){
+      const ym = Math.max(0, y-1);
+      const yp = Math.min(h-1, y+1);
+      for (let x=0;x<w;x++){
+        const v = tmp[ym*w + x] + tmp[y*w + x] + tmp[yp*w + x];
+        out[y*w + x] = (v / 9) | 0;
+      }
+    }
+    return out;
+  }
+
+  // ---------- Edge strength on grayscale ----------
+  function edgeStrengthGray(gray, w, h) {
+    const E = new Uint8Array(w*h);
+    for (let y=1;y<h-1;y++){
+      for (let x=1;x<w-1;x++){
+        const idx = y*w + x;
+        const dx = gray[idx+1] - gray[idx-1];
+        const dy = gray[idx+w] - gray[idx-w];
+        const s = Math.abs(dx) + Math.abs(dy);
+        E[idx] = s > 255 ? 255 : s;
+      }
+    }
+    return E;
+  }
+
+  function binarizeEdges(E, thr) {
+    const bin = new Uint8Array(E.length);
+    for (let i=0;i<E.length;i++) bin[i] = (E[i] >= thr) ? 1 : 0;
+    return bin;
+  }
+
+  // ---------- Efficient CC: Two-pass labeling + Union-Find ----------
+  class UnionFind {
+    constructor(n) { this.p = new Int32Array(n); this.r = new Int8Array(n); for (let i=0;i<n;i++) this.p[i]=i; }
+    find(a){ while(this.p[a]!==a){ this.p[a]=this.p[this.p[a]]; a=this.p[a]; } return a; }
+    union(a,b){
+      a=this.find(a); b=this.find(b);
+      if (a===b) return;
+      if (this.r[a] < this.r[b]) { const t=a; a=b; b=t; }
+      this.p[b]=a;
+      if (this.r[a]===this.r[b]) this.r[a]++;
+    }
+  }
+
+  function connectedComponentsTwoPass(bin, w, h) {
+    const labels = new Int32Array(w*h);
+    let nextLabel = 1;
+    const uf = new UnionFind(w*h + 1);
+
+    for (let y=0;y<h;y++){
+      for (let x=0;x<w;x++){
+        const i = y*w + x;
+        if (!bin[i]) continue;
+
+        const neigh = [];
+        if (x>0 && bin[i-1]) neigh.push(labels[i-1]);
+        if (x>0 && y>0 && bin[i-w-1]) neigh.push(labels[i-w-1]);
+        if (y>0 && bin[i-w]) neigh.push(labels[i-w]);
+        if (x<w-1 && y>0 && bin[i-w+1]) neigh.push(labels[i-w+1]);
+
+        if (neigh.length === 0) {
+          labels[i] = nextLabel++;
+        } else {
+          let minL = neigh[0];
+          for (let k=1;k<neigh.length;k++) if (neigh[k] < minL) minL = neigh[k];
+          labels[i] = minL;
+          for (let k=0;k<neigh.length;k++) uf.union(minL, neigh[k]);
+        }
+      }
+    }
+
+    const rootMap = new Map();
+    let compCount = 0;
+    const comps = [];
+    for (let y=0;y<h;y++){
+      for (let x=0;x<w;x++){
+        const i = y*w + x;
+        const L = labels[i];
+        if (!L) continue;
+        const r = uf.find(L);
+        let cid = rootMap.get(r);
+        if (cid === undefined) {
+          cid = compCount++;
+          rootMap.set(r, cid);
+          comps[cid] = {
+            count: 0,
+            minX: x, maxX: x, minY: y, maxY: y,
+            sumW: 0, sumWX: 0, sumWY: 0
+          };
+        }
+        const c = comps[cid];
+        c.count++;
+        if (x < c.minX) c.minX = x;
+        if (x > c.maxX) c.maxX = x;
+        if (y < c.minY) c.minY = y;
+        if (y > c.maxY) c.maxY = y;
+        labels[i] = cid + 1;
+      }
+    }
+    return { labels, comps };
+  }
+
+  function accumulateWeightedCentroids(labels, comps, E, w, h) {
+    for (let i=0;i<labels.length;i++){
+      const L = labels[i];
+      if (!L) continue;
+      const cid = L - 1;
+      const c = comps[cid];
+      const wgt = E[i]; // 0..255
+      c.sumW += wgt;
+      c.sumWX += wgt * (i % w);
+      c.sumWY += wgt * Math.floor(i / w);
+    }
+  }
+
+  function centroidWeighted(comp) {
+    if (comp.sumW > 1e-9) return { x: comp.sumWX / comp.sumW, y: comp.sumWY / comp.sumW };
+    return { x: (comp.minX + comp.maxX)*0.5, y: (comp.minY + comp.maxY)*0.5 };
+  }
+
+  // ---------- Extract edge points for a component (sampling) ----------
+  function sampleComponentPoints(labels, cidPlus1, w, h, comp, maxSamples) {
+    const pts = [];
+    const minX = comp.minX, maxX = comp.maxX, minY = comp.minY, maxY = comp.maxY;
+    const boxArea = (maxX-minX+1) * (maxY-minY+1);
+    const stride = Math.max(1, Math.floor(Math.sqrt(boxArea / maxSamples)));
+    for (let y=minY; y<=maxY; y+=stride) {
+      const row = y*w;
+      for (let x=minX; x<=maxX; x+=stride) {
+        const i = row + x;
+        if (labels[i] === cidPlus1) pts.push({x, y});
+      }
+    }
+    if (pts.length < Math.min(30, maxSamples)) {
+      for (let y=minY; y<=maxY; y++) {
+        const row = y*w;
+        for (let x=minX; x<=maxX; x++) {
+          const i = row + x;
+          if (labels[i] === cidPlus1) {
+            pts.push({x, y});
+            if (pts.length >= maxSamples) return pts;
+          }
+        }
+      }
+    }
+    if (pts.length > maxSamples) pts.length = maxSamples;
+    return pts;
+  }
+
+  // ---------- Circle fit (Kåsa algebraic) ----------
+  function circleFitKasa(pts) {
+    let Sxx=0, Sxy=0, Sx=0, Syy=0, Sy=0, Sn=pts.length;
+    let Sxz=0, Syz=0, Sz=0;
+    for (const p of pts) {
+      const x = p.x, y = p.y;
+      const z = x*x + y*y;
+      Sxx += x*x; Sxy += x*y; Sx += x;
+      Syy += y*y; Sy += y;
+      Sxz += x*z; Syz += y*z; Sz += z;
+    }
+    const A = [
+      [Sxx, Sxy, Sx],
+      [Sxy, Syy, Sy],
+      [Sx,  Sy,  Sn]
+    ];
+    const b = [-Sxz, -Syz, -Sz];
+    const sol = solveLinearSystem(A, b);
+    if (!sol) return null;
+
+    const D = sol[0], E = sol[1], F = sol[2];
+    const cx = -D * 0.5;
+    const cy = -E * 0.5;
+    const rad2 = cx*cx + cy*cy - F;
+    if (rad2 <= 0 || !isFinite(rad2)) return null;
+    return { cx, cy, r: Math.sqrt(rad2) };
+  }
+
+  // ---------- Ellipse fit (Fitzgibbon direct least squares) ----------
+  function ellipseFitFitzgibbon(pts) {
+    if (pts.length < 20) return null;
+
+    const S = Array.from({length: 6}, () => Array(6).fill(0));
+    for (const p of pts) {
+      const x = p.x, y = p.y;
+      const d0 = x*x;
+      const d1 = x*y;
+      const d2 = y*y;
+      const d3 = x;
+      const d4 = y;
+      const d5 = 1;
+
+      const d = [d0,d1,d2,d3,d4,d5];
+      for (let i=0;i<6;i++){
+        for (let j=i;j<6;j++){
+          S[i][j] += d[i]*d[j];
+        }
+      }
+    }
+    for (let i=0;i<6;i++) for (let j=0;j<i;j++) S[i][j] = S[j][i];
+
+    const S11 = [[S[0][0],S[0][1],S[0][2]],
+                 [S[1][0],S[1][1],S[1][2]],
+                 [S[2][0],S[2][1],S[2][2]]];
+    const S12 = [[S[0][3],S[0][4],S[0][5]],
+                 [S[1][3],S[1][4],S[1][5]],
+                 [S[2][3],S[2][4],S[2][5]]];
+    const S21 = [[S[3][0],S[3][1],S[3][2]],
+                 [S[4][0],S[4][1],S[4][2]],
+                 [S[5][0],S[5][1],S[5][2]]];
+    const S22 = [[S[3][3],S[3][4],S[3][5]],
+                 [S[4][3],S[4][4],S[4][5]],
+                 [S[5][3],S[5][4],S[5][5]]];
+
+    const invS22 = invert3x3mat(S22);
+    if (!invS22) return null;
+
+    const T = matMul3(matMul3(S12, invS22), S21);
+    const M = matSub3(S11, T);
+
+    const C = [
+      [0, 0, 2],
+      [0,-1, 0],
+      [2, 0, 0]
+    ];
+
+    const Cr = [
+      [C[0][0], C[0][1], C[0][2]],
+      [C[1][0], C[1][1]-1e-12, C[1][2]],
+      [C[2][0], C[2][1], C[2][2]]
+    ];
+    const invCr = invert3x3mat(Cr);
+    if (!invCr) return null;
+
+    const A = matMul3(invCr, M);
+    const eig = eigen3x3Real(A);
+    if (!eig) return null;
+
+    let best = null;
+    for (const ev of eig) {
+      const a = ev.v[0], b = ev.v[1], c = ev.v[2];
+      if (!isFinite(a) || !isFinite(b) || !isFinite(c)) continue;
+      if ((4*a*c - b*b) > 1e-12) { best = ev.v; break; }
+    }
+    if (!best) return null;
+
+    const a = best[0], b = best[1], c = best[2];
+    const rhs = matVec3(S21, [a,b,c]);
+    const def = matVec3(invS22, rhs).map(v => -v);
+    const d = def[0], e = def[1], f = def[2];
+
+    const A2 = [
+      [2*a, b],
+      [b, 2*c]
+    ];
+    const B2 = [-d, -e];
+    const center = solve2x2(A2, B2);
+    if (!center) return null;
+
+    return { cx: center[0], cy: center[1], conic: {a,b,c,d,e,f} };
+  }
+
+  // ---------- Small matrix helpers ----------
+  function invert3x3mat(M) {
+    const a=M[0][0], b=M[0][1], c=M[0][2],
+          d=M[1][0], e=M[1][1], f=M[1][2],
+          g=M[2][0], h=M[2][1], i=M[2][2];
+
+    const A = (e*i - f*h);
+    const B = -(d*i - f*g);
+    const C = (d*h - e*g);
+    const D = -(b*i - c*h);
+    const E = (a*i - c*g);
+    const F = -(a*h - b*g);
+    const G = (b*f - c*e);
+    const Hc = -(a*f - c*d);
+    const I = (a*e - b*d);
+
+    const det = a*A + b*B + c*C;
+    if (Math.abs(det) < 1e-12) return null;
+    const invDet = 1/det;
+
+    return [
+      [A*invDet, D*invDet, G*invDet],
+      [B*invDet, E*invDet, Hc*invDet],
+      [C*invDet, F*invDet, I*invDet]
+    ];
+  }
+
+  function matMul3(A,B){
+    const R = [[0,0,0],[0,0,0],[0,0,0]];
+    for (let r=0;r<3;r++){
+      for (let c=0;c<3;c++){
+        R[r][c] = A[r][0]*B[0][c] + A[r][1]*B[1][c] + A[r][2]*B[2][c];
+      }
+    }
+    return R;
+  }
+  function matSub3(A,B){
+    const R = [[0,0,0],[0,0,0],[0,0,0]];
+    for (let r=0;r<3;r++) for (let c=0;c<3;c++) R[r][c]=A[r][c]-B[r][c];
+    return R;
+  }
+  function matVec3(A,v){
+    return [
+      A[0][0]*v[0] + A[0][1]*v[1] + A[0][2]*v[2],
+      A[1][0]*v[0] + A[1][1]*v[1] + A[1][2]*v[2],
+      A[2][0]*v[0] + A[2][1]*v[1] + A[2][2]*v[2]
+    ];
+  }
+  function solve2x2(A,b){
+    const det = A[0][0]*A[1][1] - A[0][1]*A[1][0];
+    if (Math.abs(det) < 1e-12) return null;
+    const invDet = 1/det;
+    const x = ( b[0]*A[1][1] - b[1]*A[0][1]) * invDet;
+    const y = (-b[0]*A[1][0] + b[1]*A[0][0]) * invDet;
+    return [x,y];
+  }
+
+  function eigen3x3Real(A){
+    const a11=A[0][0], a12=A[0][1], a13=A[0][2];
+    const a21=A[1][0], a22=A[1][1], a23=A[1][2];
+    const a31=A[2][0], a32=A[2][1], a33=A[2][2];
+
+    const c2 = -(a11 + a22 + a33);
+    const c1 = (a11*a22 + a11*a33 + a22*a33) - (a12*a21 + a13*a31 + a23*a32);
+    const c0 = -(a11*a22*a33 + a12*a23*a31 + a13*a21*a32 - a13*a22*a31 - a12*a21*a33 - a11*a23*a32);
+
+    const lambdas = cubicRealRoots(1, c2, c1, c0);
+    if (!lambdas || lambdas.length === 0) return null;
+
+    const out = [];
+    for (const lam of lambdas) {
+      const M = [
+        [A[0][0]-lam, A[0][1],     A[0][2]],
+        [A[1][0],     A[1][1]-lam, A[1][2]],
+        [A[2][0],     A[2][1],     A[2][2]-lam]
+      ];
+      const v = nullspaceVector3(M);
+      if (!v) continue;
+      out.push({ l: lam, v });
+    }
+    return out;
+  }
+
+  function nullspaceVector3(M){
+    const r0 = M[0], r1 = M[1], r2 = M[2];
+    const n0 = r0[0]*r0[0]+r0[1]*r0[1]+r0[2]*r0[2];
+    const n1 = r1[0]*r1[0]+r1[1]*r1[1]+r1[2]*r1[2];
+    const n2 = r2[0]*r2[0]+r2[1]*r2[1]+r2[2]*r2[2];
+
+    let a=r0,b=r1;
+    if (n2 >= n1 && n2 >= n0) { a=r2; b = (n1>=n0)? r1 : r0; }
+    else if (n1 >= n0 && n1 >= n2) { a=r1; b = (n2>=n0)? r2 : r0; }
+    else { a=r0; b = (n2>=n1)? r2 : r1; }
+
+    const v = cross3(a,b);
+    const norm = Math.hypot(v[0],v[1],v[2]);
+    if (norm < 1e-10) {
+      const v2 = cross3(r0,r2);
+      const n2b = Math.hypot(v2[0],v2[1],v2[2]);
+      if (n2b < 1e-10) return null;
+      return [v2[0]/n2b, v2[1]/n2b, v2[2]/n2b];
+    }
+    return [v[0]/norm, v[1]/norm, v[2]/norm];
+  }
+
+  function cross3(a,b){
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+
+  function cubicRealRoots(a,b,c,d){
+    if (Math.abs(a) < 1e-14) return null;
+    const p = (3*a*c - b*b) / (3*a*a);
+    const q = (2*b*b*b - 9*a*b*c + 27*a*a*d) / (27*a*a*a);
+    const shift = -b / (3*a);
+
+    const disc = (q*q)/4 + (p*p*p)/27;
+    if (disc > 1e-12) {
+      const sqrtD = Math.sqrt(disc);
+      const u = cbrt(-q/2 + sqrtD);
+      const v = cbrt(-q/2 - sqrtD);
+      return [u+v + shift];
+    } else if (Math.abs(disc) <= 1e-12) {
+      const u = cbrt(-q/2);
+      return [2*u + shift, -u + shift];
+    } else {
+      const r = Math.sqrt(-(p*p*p)/27);
+      const phi = Math.acos(clamp((-q/(2*r)), -1, 1));
+      const t = 2*Math.sqrt(-p/3);
+      return [
+        t*Math.cos(phi/3) + shift,
+        t*Math.cos((phi+2*Math.PI)/3) + shift,
+        t*Math.cos((phi+4*Math.PI)/3) + shift
+      ];
+    }
+  }
+  function cbrt(x){ return x<0 ? -Math.pow(-x,1/3) : Math.pow(x,1/3); }
+
+  // ---------- Debug render ----------
+  function renderGrayToCanvas(gray, w, h, canvas, ctx, flipY=false) {
+    canvas.width = w; canvas.height = h;
+    const imgData = ctx.createImageData(w,h);
+    const d = imgData.data;
+
+    if (!flipY) {
+      for (let i=0, p=0; p<gray.length; i+=4, p++){
+        const v = gray[p];
+        d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=255;
+      }
+    } else {
+      for (let y=0; y<h; y++){
+        const sy = h - 1 - y;
+        for (let x=0; x<w; x++){
+          const p = sy*w + x;
+          const v = gray[p];
+          const i = (y*w + x) * 4;
+          d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=255;
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, 0,0);
+  }
+  function renderBinaryToCanvas(bin, w, h, canvas, ctx, flipY=false) {
+    canvas.width = w; canvas.height = h;
+    const imgData = ctx.createImageData(w,h);
+    const d = imgData.data;
+
+    if (!flipY) {
+      for (let i=0, p=0; p<bin.length; i+=4, p++){
+        const v = bin[p] ? 255 : 0;
+        d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=255;
+      }
+    } else {
+      for (let y=0; y<h; y++){
+        const sy = h - 1 - y;
+        for (let x=0; x<w; x++){
+          const p = sy*w + x;
+          const v = bin[p] ? 255 : 0;
+          const i = (y*w + x) * 4;
+          d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=255;
+        }
+      }
+    }
+
+    ctx.putImageData(imgData, 0,0);
+  }
+
+  
+  function drawWarpCentroids(centroidsWarp) {
+    if (!Array.isArray(centroidsWarp)) return;
+
+    wctx.save();
+    wctx.lineWidth = 2;
+    wctx.strokeStyle = 'rgba(255,64,64,0.95)';
+    wctx.fillStyle = 'rgba(255,64,64,0.95)';
+
+    for (const c of centroidsWarp) {
+      const rr = Math.max(4, c.r || 6);
+      const yDraw = c.y;
+      wctx.beginPath(); wctx.arc(c.x, yDraw, rr, 0, Math.PI*2); wctx.stroke();
+      wctx.beginPath(); wctx.arc(c.x, yDraw, 2.2, 0, Math.PI*2); wctx.fill();
+
+      if (showCentroidIds) {
+        const label = String((c.displayId ?? c.id ?? 0));
+        wctx.font = '12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+        wctx.textBaseline = 'middle';
+        wctx.lineWidth = 3;
+        wctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        wctx.strokeText(label, c.x + 10, yDraw - 10);
+        wctx.fillStyle = 'rgba(255,255,255,0.95)';
+        wctx.fillText(label, c.x + 10, yDraw - 10);
+        // restore
+        wctx.strokeStyle = 'rgba(255,64,64,0.95)';
+        wctx.fillStyle = 'rgba(255,64,64,0.95)';
+        wctx.lineWidth = 2;
+      }
+    }
+    wctx.restore();
+  }
+
+  function drawWarpConnections() {
+    if (!manualOverrideActive || manualSequenceIds.length < 2 || !Array.isArray(lastWarpCentroids)) return;
+
+    const byId = new Map(lastWarpCentroids.map(c => [c.id, c]));
+    wctx.save();
+    wctx.lineWidth = 2;
+    wctx.strokeStyle = 'rgba(0,255,120,0.95)';
+
+    wctx.beginPath();
+    let started = false;
+    for (const id of manualSequenceIds) {
+      const c = byId.get(id);
+      if (!c) continue;
+      if (!started) { wctx.moveTo(c.x, c.y); started = true; }
+      else wctx.lineTo(c.x, c.y);
+    }
+    if (started) wctx.stroke();
+
+    // highlight selected nodes
+    for (const id of manualSequenceIds) {
+      const c = byId.get(id);
+      if (!c) continue;
+      wctx.beginPath();
+      wctx.arc(c.x, c.y, Math.max(6, (c.r || 6) + 2), 0, Math.PI*2);
+      wctx.stroke();
+    }
+    wctx.restore();
+  }
+
+  function redrawWarpView() {
+    if (!lastWarpW || !lastWarpH || !warpBaseCanvas.width || !warpBaseCanvas.height) return;
+    if (!Array.isArray(lastWarpCentroids)) return;
+
+    // restore base grayscale image
+    if (warpC.width !== lastWarpW) warpC.width = lastWarpW;
+    if (warpC.height !== lastWarpH) warpC.height = lastWarpH;
+
+    wctx.clearRect(0, 0, warpC.width, warpC.height);
+    wctx.drawImage(warpBaseCanvas, 0, 0);
+
+    drawWarpCentroids(lastWarpCentroids);
+    drawWarpConnections();
+  }
+
+  function applyManualOrderFromSequence() {
+    if (!Array.isArray(lastCentroidsMain) || !lastCentroidsMain.length) return;
+    if (!manualOverrideActive || !manualSequenceIds.length) return;
+
+    const byId = new Map(lastCentroidsMain.map(c => [c.id, c]));
+    const used = new Set();
+    const reordered = [];
+
+    for (const id of manualSequenceIds) {
+      const c = byId.get(id);
+      if (c && !used.has(id)) { reordered.push(c); used.add(id); }
+    }
+    for (const c of lastCentroidsMain) {
+      const id = c.id;
+      if (!used.has(id)) reordered.push(c);
+    }
+    lastCentroidsMain = reordered;
+
+    renderCentroidTable(lastCentroidsMain, lastSummaryText, null);
+    drawMain({ centroids: lastCentroidsMain, quad: true });
+    updateCentroidActionButtons();
+  }
+
+  function onWarpClick(evt) {
+    if (!Array.isArray(lastWarpCentroids) || !lastWarpCentroids.length) return;
+    if (!Array.isArray(lastCentroidsMain) || !lastCentroidsMain.length) return;
+
+    const rect = warpC.getBoundingClientRect();
+    const x = (evt.clientX - rect.left) * (warpC.width / rect.width);
+    const y = (evt.clientY - rect.top) * (warpC.height / rect.height);
+    // If view is mirrored via CSS, map click coords back into internal canvas coords.
+    let xI = x, yI = y;
+    if (viewFlipH) xI = warpC.width - xI;
+    if (viewFlipV) yI = warpC.height - yI;
+
+    // find nearest centroid
+    let best = null, bestD = Infinity;
+    for (const c of lastWarpCentroids) {
+      const dx = c.x - xI, dy = c.y - yI;
+      const d = Math.hypot(dx, dy);
+      const thr = Math.max(10, (c.r || 6) * 0.8);
+      if (d < thr && d < bestD) { best = c; bestD = d; }
+    }
+    if (!best) return;
+
+    const id = best.id;
+    if (!manualSequenceIds.includes(id)) {
+      manualSequenceIds.push(id);
+      manualOverrideActive = manualSequenceIds.length > 0;
+      if (btnDeleteConnections) btnDeleteConnections.disabled = !manualOverrideActive;
+      if (btnSortByConnection) btnSortByConnection.disabled = !manualOverrideActive;
+      redrawWarpView();
+    }
+  }
+
+  // Hook up warp click + delete connections
+  warpC.addEventListener('click', onWarpClick);
+  if (btnSortByConnection) {
+    btnSortByConnection.addEventListener('click', () => {
+      if (!manualSequenceIds.length) {
+        setStatus('Keine Connections gesetzt. Klicke in der Warp-Ansicht Centroids in der gewünschten Reihenfolge an.', 'warn');
+        return;
+      }
+      manualOverrideActive = true;
+      applyManualOrderFromSequence();
+      setStatus(`Sort Table by Connection: ${manualSequenceIds.length} ausgewählt (Rest bleibt hinten).`, 'ok');
+    });
+  }
+
+  if (btnDeleteConnections) {
+    btnDeleteConnections.addEventListener('click', () => {
+      resetConnections(true);
+      setStatus("Connections gelöscht → ursprüngliche Erkennungs-Reihenfolge wiederhergestellt.", "ok");
+    });
+  }
+
+
+  // ---------- Core pipeline ----------
+  function run() {
+    if (!imgLoaded) return;
+    if (roiPts.length !== 4) { setStatus("Please click 4 ROI points.", "warn"); return; }
+
+    const t0 = performance.now();
+    drawMain({centroids:null, quad:true});
+
+    // Rohpixel aus srcCanvas lesen (ohne ROI-Zahlen/Marker)
+    const mainData = srcCtx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+    const grayMain = imageDataToGray(mainData);
+
+    let quad = sortQuadTLTRBRBL(roiPts);
+    quad = normalizeQuadLandscape(quad);
+
+    const warpW = clamp(parseInt(warpWEl.value || "900", 10), 300, 2400);
+    const topLen = Math.hypot(quad[1].x-quad[0].x, quad[1].y-quad[0].y);
+    const botLen = Math.hypot(quad[2].x-quad[3].x, quad[2].y-quad[3].y);
+    const leftLen = Math.hypot(quad[3].x-quad[0].x, quad[3].y-quad[0].y);
+    const rightLen= Math.hypot(quad[2].x-quad[1].x, quad[2].y-quad[1].y);
+    const avgW = (topLen + botLen) * 0.5;
+    const avgH = (leftLen + rightLen) * 0.5;
+    const warpH = Math.max(200, Math.round(warpW * (avgH / Math.max(1, avgW))));
+
+    warpC.width = warpW; warpC.height = warpH;
+
+    const dst = [
+      {x:0, y:0},
+      {x:warpW-1, y:0},
+      {x:warpW-1, y:warpH-1},
+      {x:0, y:warpH-1}
+    ];
+
+    const H = homographyFrom4(quad, dst);
+    if (!H) { setStatus("Homographie fehlgeschlagen (degeneriertes Viereck).", "warn"); return; }
+    const Hinv = invert3x3(H);
+    if (!Hinv) { setStatus("Homographie nicht invertierbar.", "warn"); return; }
+
+    const w = warpW, h = warpH;
+    const srcW = srcCanvas.width, srcH = srcCanvas.height;
+
+    let grayWarp = new Uint8Array(w*h);
+    for (let y=0;y<h;y++){
+      for (let x=0;x<w;x++){
+        const src = applyH(Hinv, x, y);
+        grayWarp[y*w + x] = bilinearSampleGray(grayMain, srcW, srcH, src.x, src.y) | 0;
+      }
+    }
+    if (blurEl.value === "1") grayWarp = boxBlur3(grayWarp, w, h);
+
+    const E = edgeStrengthGray(grayWarp, w, h);
+
+    // ✅ NUR MANUELLER THRESHOLD
+    const thr = clamp(parseInt(thrManualEl.value || "25", 10), 0, 255);
+
+    const bin = binarizeEdges(E, thr);
+
+    const { labels, comps } = connectedComponentsTwoPass(bin, w, h);
+    accumulateWeightedCentroids(labels, comps, E, w, h);
+
+    const minPix = parseInt(minPixEl.value, 10);
+    const maxPix = parseInt(maxPixEl.value, 10);
+    const minBox = parseInt(minBoxEl.value, 10);
+    const maxBox = parseInt(maxBoxEl.value, 10);
+
+    const minR = parseFloat(minREl.value || "0");
+
+    const refine = refineEl.value;
+    const maxSamples = parseInt(fitSampleEl.value, 10);
+
+    const centroidsWarp = [];
+    const fitFailed = { circle: 0, ellipse: 0 };
+
+    for (let cid=0; cid<comps.length; cid++) {
+      const c = comps[cid];
+      if (!c) continue;
+      if (c.count < minPix || c.count > maxPix) continue;
+
+      const bw = c.maxX - c.minX + 1;
+      const bh = c.maxY - c.minY + 1;
+      if (bw < minBox || bh < minBox) continue;
+      if (bw > maxBox || bh > maxBox) continue;
+
+      const ratio = bw > bh ? bw / bh : bh / bw;
+      if (ratio > 2.0) continue;
+
+      const rEst = 0.25 * (bw + bh);
+      if (rEst < minR) continue;
+
+      const init = centroidWeighted(c);
+      let cx = init.x, cy = init.y;
+
+      if (refine !== "none") {
+        const pts = sampleComponentPoints(labels, cid+1, w, h, c, maxSamples);
+
+        if (refine === "circle") {
+          const fit = circleFitKasa(pts);
+          if (fit && isFinite(fit.cx) && isFinite(fit.cy)) {
+            cx = fit.cx; cy = fit.cy;
+          } else {
+            fitFailed.circle++;
+          }
+        } else if (refine === "ellipse") {
+          const fit = ellipseFitFitzgibbon(pts);
+          if (fit && isFinite(fit.cx) && isFinite(fit.cy)) {
+            cx = fit.cx; cy = fit.cy;
+          } else {
+            fitFailed.ellipse++;
+          }
+        }
+      }
+
+      centroidsWarp.push({ x: cx, y: cy, r: rEst, bw, bh, pix: c.count });
+    }
+
+    let centroidsMain = centroidsWarp.map(p => {
+      const src = applyH(Hinv, p.x, p.y);
+      return { x: src.x, y: src.y, r: p.r };
+    });
+
+    // Assign stable IDs (0..n-1) in original detection order (before any target sort)
+    ensureCentroidIds(centroidsMain);
+    centroidsWarp.forEach((c, i) => { if (c && (c.id === undefined || c.id === null)) c.id = i; });
+    lastCentroidsRaw = centroidsMain.slice();
+    // New run clears any manual connection-based ordering
+    resetConnections(false);
+
+    // Auto-sort (optional) by Target JSON
+    let targetSortInfo = null;
+    if (targetData && Array.isArray(targetData.points) && targetData.points.length) {
+      const res = sortCentroidsByTarget(centroidsMain, H, targetData.points);
+      if (res && Array.isArray(res.sorted)) {
+        centroidsMain = res.sorted;
+        targetSortInfo = res.info || null;
+      }
+    }
+
+    renderGrayToCanvas(grayWarp, w, h, warpC, wctx);
+    // store base warp image (without overlays) for fast redraw on clicks
+    warpBaseCanvas.width = w; warpBaseCanvas.height = h;
+    warpBaseCtx.clearRect(0,0,w,h);
+    warpBaseCtx.drawImage(warpC, 0, 0);
+    lastWarpW = w; lastWarpH = h;
+    lastWarpCentroids = centroidsWarp;
+    redrawWarpView();
+
+    if (dbgModeEl.value === "edges") renderGrayToCanvas(E, w, h, dbgC, dctx);
+    else renderBinaryToCanvas(bin, w, h, dbgC, dctx);
+
+    stopPulse();
+    drawMain({centroids: centroidsMain, quad:true});
+
+    const t1 = performance.now();
+
+    let summaryText =
+      `Warp: ${w}x${h}\n` +
+      `Edge thr: ${thr} (manual)\n` +
+      `Min Radius: ${minR}\n` +
+      `Refine: ${refine} (fail circle=${fitFailed.circle}, ellipse=${fitFailed.ellipse})\n` +
+      `Centroids: ${centroidsMain.length}\n` +
+      `Time: ${(t1-t0).toFixed(1)} ms\n`;
+
+    if (targetSortInfo) {
+      const m = Math.min(targetSortInfo.detected, targetSortInfo.expected);
+      summaryText += `Target sort: matched ${targetSortInfo.matched}/${m} (mean≈${(targetSortInfo.meanWarpPx ?? 0).toFixed(2)} px, max≈${(targetSortInfo.maxWarpPx ?? 0).toFixed(2)} px)\n`;
+    }
+
+    lastCentroidsMain = centroidsMain;
+    lastSummaryText = summaryText;
+
+    // im aktuellen Bild-Record merken
+    const rec = currentRec();
+    if (rec) { rec.centroids = centroidsMain.map(p => ({ x: p.x, y: p.y })); rec.summary = summaryText; rec.roiPts = roiPts.slice(); }
+
+    // ✅ Auto-append/update into session index store (keeps previous images)
+    autoSaveCurrentToIndex(centroidsMain);
+
+    renderCentroidTable(centroidsMain, summaryText);
+
+    // ✅ Buttons (Save/Export) aktivieren sobald Daten vorhanden sind
+    updateCentroidActionButtons();
+
+    setStatus(`Fertig: ${centroidsMain.length} Zentren (Refine=${refine})`, "ok");
+  }
+
+  // ---------- UI events ----------
+  fileEl.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    // gleiche Auswahl später nochmal erlauben
+    fileEl.value = "";
+
+    // Dateien als DataURL laden + Image-Objekte erstellen
+    const loaded = await Promise.all(files.map(f => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        const im = new Image();
+        im.onload = () => resolve({ file: f, img: im, dataUrl });
+        im.onerror = () => reject(new Error("image load failed"));
+        im.src = dataUrl;
+      };
+      reader.onerror = () => reject(new Error("file read failed"));
+      reader.readAsDataURL(f);
+    }).catch(() => null)));
+
+    const added = loaded.filter(Boolean);
+    if (!added.length) return;
+
+    // hinzufügen (nicht überschreiben)
+    for (const it of added) {
+      images.push({
+        titel: it.file?.name || "",
+        type: it.file?.type || "",
+        img: it.img,
+        roiPts: null,
+        centroids: null,
+        summary: ""
+      });
+    }
+
+    // Falls noch kein aktuelles Bild gewählt: erstes anzeigen
+    if (currentIndex === -1) {
+      currentIndex = 0;
+      setCurrentRecFromIndex(0);
+    } else {
+      updateImageNavUI();
+      updateCentroidActionButtons();
+      setStatus(`${added.length} Bild(er) hinzugefügt. Aktuell: ${currentIndex + 1}/${images.length}`, "ok");
+    }
+  });  maxWEl.addEventListener('change', () => {
+    if (!imgLoaded) return;
+    const maxW = clamp(parseInt(maxWEl.value || "1400", 10), 400, 4000);
+    fitImageToCanvas(maxW);
+
+    drawRawToSrc();
+
+    roiPts = [];
+    const rec = currentRec();
+    if (rec) { rec.roiPts = []; rec.centroids = null; rec.summary = ""; }
+
+    updateRoiState();
+    lastCentroidsMain = null;
+    lastCentroidsRaw = null;
+    lastSummaryText = "";
+    resetConnections(false);
+      renderCentroidTable([], "");
+    updateCentroidActionButtons();
+    setSelectedIndex(null);
+    drawMain({centroids:null, quad:true});
+    setStatus("Downscale geändert → ROI bitte neu setzen.", "warn");
+  });
+
+  btnClear.addEventListener('click', () => {
+    roiPts = [];
+    const rec = currentRec();
+    if (rec) { rec.roiPts = []; }
+    updateRoiState();
+    lastCentroidsMain = null;
+    lastCentroidsRaw = null;
+    lastSummaryText = "";
+    resetConnections(false);
+      renderCentroidTable([], "");
+    updateCentroidActionButtons();
+    setSelectedIndex(null);
+    drawMain({centroids:null, quad:true});
+    setStatus("ROI Punkte gelöscht.", "ok");
+  });
+
+  btnRun.addEventListener('click', run);
+
+  // Bild Navigation
+  btnPrevImg.addEventListener('click', () => {
+    if (images.length <= 1) return;
+    if (currentIndex > 0) setCurrentRecFromIndex(currentIndex - 1);
+  });
+  btnNextImg.addEventListener('click', () => {
+    if (images.length <= 1) return;
+    if (currentIndex < images.length - 1) setCurrentRecFromIndex(currentIndex + 1);
+  });
+
+
+  main.addEventListener('click', (evt) => {
+    if (!imgLoaded) return;
+    if (roiPts.length >= 4) return;
+    const p = canvasPoint(evt);
+    roiPts.push(p);
+    updateRoiState();
+    drawMain({centroids:null, quad:true});
+    if (roiPts.length === 4) setStatus("ROI komplett. Du kannst jetzt berechnen.", "ok");
+  });
+
+  updateRoiState();
+  updateImageNavUI();
+  updateCentroidActionButtons();
+  drawMain({centroids:null, quad:true});
+})();
+</script>
+</body>
+</html>
