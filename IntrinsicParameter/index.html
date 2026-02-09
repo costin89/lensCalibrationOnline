@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Variante B – Intrinsics aus Zentroid-JSON</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 18px; max-width: 1080px; }
+    h1 { margin: 0 0 10px; font-size: 18px; }
+    .hint { font-size: 13px; opacity: 0.85; margin-bottom: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 10px; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 12px; padding: 12px; }
+    label { display: block; font-size: 12px; opacity: .9; margin-bottom: 4px; }
+    input[type="number"] { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; }
+    button { padding: 9px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.45); background: transparent; cursor: pointer; }
+    button.primary { border-color: rgba(80,140,255,.8); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .status { font-size: 13px; opacity: .9; }
+    pre { white-space: pre-wrap; word-break: break-word; background: rgba(127,127,127,.10); padding: 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.25); }
+    table { width:100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,.25); }
+    th { opacity: .9; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <h1>Variante B: Target-Inputs → JSON importieren → Intrinsics berechnen</h1>
+  <div class="hint">
+    Diese Seite lädt <span class="mono">math_helper.js</span> (global <span class="mono">MathHelper</span>) und importiert
+    <span class="mono">RealWorldTargetInputCalculation_2.js</span> als ES‑Modul. <b>Wichtig:</b> Öffne die HTML über einen lokalen Webserver
+    (z. B. <span class="mono">python -m http.server</span>), da Browser ES‑Module von <span class="mono">file://</span> oft blocken.
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label for="cols">cols</label>
+        <input id="cols" type="number" min="1" step="1" value="6" />
+      </div>
+      <div>
+        <label for="rows">rows</label>
+        <input id="rows" type="number" min="1" step="1" value="8" />
+      </div>
+      <div>
+        <label for="pitchMm">pitchMm</label>
+        <input id="pitchMm" type="number" min="0.001" step="0.1" value="20" />
+      </div>
+
+      <div>
+        <label for="circleDiameterMm">circleDiameterMm</label>
+        <input id="circleDiameterMm" type="number" min="0" step="0.1" value="6" />
+      </div>
+
+      <div>
+        <label for="paperWmm">paperWmm</label>
+        <input id="paperWmm" type="number" min="1" step="1" value="210" />
+      </div>
+      <div>
+        <label for="paperHmm">paperHmm</label>
+        <input id="paperHmm" type="number" min="1" step="1" value="297" />
+      </div>
+      <div>
+        <label for="marginMm">marginMm</label>
+        <input id="marginMm" type="number" min="0" step="0.1" value="10" />
+      </div>
+
+      <div>
+        <label>Aktionen</label>
+        <div class="row">
+          <button id="btnImport" class="primary">JSON importieren</button>
+          <button id="btnCalibrate" class="primary" disabled>Calibrate</button>
+          <button id="btnDownload" disabled>Result JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <input id="fileInput" type="file" accept=".json,application/json" style="display:none" />
+    <div style="margin-top:10px" class="row">
+      <div class="status" id="status">Noch keine Datei importiert.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2 style="font-size:15px; margin:0 0 10px">Ergebnis</h2>
+    <div id="summary"></div>
+    <pre id="out" class="mono">—</pre>
+  </div>
+
+  <!-- math_helper.js defines window.MathHelper -->
+  <script src="./math_helper.js"></script>
+
+  <script type="module">
+    import { generateAndPlace } from "./RealWorldTargetInputCalculation_2.js";
+
+    const $ = (id) => document.getElementById(id);
+
+    const els = {
+      cols: $("cols"),
+      rows: $("rows"),
+      pitchMm: $("pitchMm"),
+      paperWmm: $("paperWmm"),
+      paperHmm: $("paperHmm"),
+      marginMm: $("marginMm"),
+      circleDiameterMm: $("circleDiameterMm"),
+      btnImport: $("btnImport"),
+      btnCalibrate: $("btnCalibrate"),
+      btnDownload: $("btnDownload"),
+      fileInput: $("fileInput"),
+      status: $("status"),
+      out: $("out"),
+      summary: $("summary"),
+    };
+
+    if (!window.MathHelper) {
+      els.status.textContent = "Fehler: MathHelper nicht gefunden. Liegt math_helper.js im gleichen Ordner?";
+      els.status.style.color = "crimson";
+    }
+
+    let imported = null;   // raw JSON
+    let lastResult = null; // calibration output
+
+    function readNum(el) {
+      const v = Number(el.value);
+      if (!Number.isFinite(v)) throw new Error("Ungültiger Wert: " + el.id);
+      return v;
+    }
+
+    function buildObjectPoints() {
+      const cols = Math.trunc(readNum(els.cols));
+      const rows = Math.trunc(readNum(els.rows));
+      const pitchMm = readNum(els.pitchMm);
+      const paperWmm = readNum(els.paperWmm);
+      const paperHmm = readNum(els.paperHmm);
+      const marginMm = readNum(els.marginMm);
+      const circleDiameterMm = readNum(els.circleDiameterMm);
+
+      const { placedPoints, fits, offsetX, offsetY } = generateAndPlace({
+        cols, rows, pitchMm, paperWmm, paperHmm, marginMm, circleDiameterMm
+      });
+
+      // Object points in target-plane units (mm). id must match centroid ids.
+      const objPoints = placedPoints.map(p => ({
+        id: p.index,
+        X: p.pageX,
+        Y: p.pageY
+      }));
+
+      return { objPoints, fits, offsetX, offsetY, cols, rows, pitchMm, paperWmm, paperHmm, marginMm, circleDiameterMm };
+    }
+
+    function parseExport(json) {
+      // Supports your IndexedDB export structure:
+      // { items: { "<key>": { centroids:[{id,x,y},...], ... }, ... } }
+      const items = json?.items;
+      if (!items || typeof items !== "object") throw new Error("JSON: Erwartet Feld 'items' (object).");
+
+      const images = [];
+      for (const [key, item] of Object.entries(items)) {
+        const centroids = item?.centroids;
+        if (!Array.isArray(centroids) || centroids.length === 0) continue;
+
+        const points = centroids.map(c => ({
+          id: c.id,
+          u: c.x,
+          v: c.y
+        }));
+
+        images.push({
+          name: item.titel || key,
+          points
+        });
+      }
+
+      if (images.length === 0) throw new Error("Keine 'centroids' gefunden (in items[*].centroids).");
+
+      return images;
+    }
+
+    function fmt(n, d=6) {
+      if (!Number.isFinite(n)) return String(n);
+      const abs = Math.abs(n);
+      if (abs !== 0 && (abs < 1e-4 || abs > 1e6)) return n.toExponential(6);
+      return n.toFixed(d);
+    }
+
+    function setStatus(msg, ok=true) {
+      els.status.textContent = msg;
+      els.status.style.color = ok ? "" : "crimson";
+    }
+
+    function renderResult(result) {
+      const K = result.K;
+      const dist = result.dist; // [k1,k2,k3,p1,p2]
+      const fx = K[0][0], skew = K[0][1], cx = K[0][2];
+      const fy = K[1][1], cy = K[1][2];
+
+      const k1 = dist[0] ?? 0;
+      const k2 = dist[1] ?? 0;
+      const k3 = dist[2] ?? 0;
+      const p1 = dist[3] ?? 0;
+      const p2 = dist[4] ?? 0;
+
+      // summary table
+      els.summary.innerHTML = `
+        <table>
+          <tr><th>Parameter</th><th>Wert</th><th>Einheit</th></tr>
+          <tr><td>fx</td><td class="mono">${fmt(fx,4)}</td><td>px</td></tr>
+          <tr><td>fy</td><td class="mono">${fmt(fy,4)}</td><td>px</td></tr>
+          <tr><td>Principal Point (cx, cy)</td><td class="mono">(${fmt(cx,4)}, ${fmt(cy,4)})</td><td>px</td></tr>
+          <tr><td>Skew</td><td class="mono">${fmt(skew,6)}</td><td>px</td></tr>
+          <tr><td>k1</td><td class="mono">${fmt(k1,8)}</td><td>—</td></tr>
+          <tr><td>k2</td><td class="mono">${fmt(k2,8)}</td><td>—</td></tr>
+          <tr><td>p1</td><td class="mono">${fmt(p1,8)}</td><td>—</td></tr>
+          <tr><td>p2</td><td class="mono">${fmt(p2,8)}</td><td>—</td></tr>
+          <tr><td>k3</td><td class="mono">${fmt(k3,8)}</td><td>—</td></tr>
+          <tr><td>RMS reprojection</td><td class="mono">${fmt(result.rms,6)}</td><td>px</td></tr>
+        </table>
+      `;
+
+      const pretty = {
+        K,
+        // order as you asked: k1,k2,p1,p2,k3
+        distortion: { k1, k2, p1, p2, k3 },
+        rmsPx: result.rms,
+        // optional: per image extrinsics
+        extrinsics: result.rvecs.map((rvec, i) => ({
+          imageIndex: i,
+          rvec,
+          tvec: result.tvecs[i]
+        }))
+      };
+
+      els.out.textContent = JSON.stringify(pretty, null, 2);
+      lastResult = pretty;
+      els.btnDownload.disabled = false;
+    }
+
+    // Import
+    els.btnImport.addEventListener("click", () => els.fileInput.click());
+    els.fileInput.addEventListener("change", async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        imported = JSON.parse(text);
+        const images = parseExport(imported);
+
+        // Update status with quick sanity checks
+        const totalCentroids = images.reduce((s, im) => s + im.points.length, 0);
+        setStatus(`Import ok: ${images.length} image(s), ${totalCentroids} centroid(s).`);
+
+        els.btnCalibrate.disabled = false;
+        els.btnDownload.disabled = true;
+        els.summary.innerHTML = "";
+        els.out.textContent = "Bereit. Klicke „Calibrate“.";
+      } catch (e) {
+        console.error(e);
+        imported = null;
+        els.btnCalibrate.disabled = true;
+        els.btnDownload.disabled = true;
+        setStatus("Import fehlgeschlagen: " + (e?.message || e), false);
+      } finally {
+        // allow re-import same file
+        ev.target.value = "";
+      }
+    });
+
+    // Calibrate
+    els.btnCalibrate.addEventListener("click", () => {
+      if (!imported) return;
+
+      try {
+        const images = parseExport(imported);
+        const { objPoints, fits, cols, rows, pitchMm, paperWmm, paperHmm, marginMm, circleDiameterMm } = buildObjectPoints();
+
+        // sanity: centroid ids must be within [0, cols*rows-1]
+        const maxId = cols*rows - 1;
+        let bad = 0, kept = 0;
+        for (const im of images) {
+          im.points = im.points.filter(p => {
+            const ok = Number.isInteger(p.id) && p.id >= 0 && p.id <= maxId;
+            if (!ok) bad++;
+            else kept++;
+            return ok;
+          });
+        }
+
+        if (!fits) {
+          setStatus("Warnung: Grid passt laut Papier/Margin nicht (fits=false). Berechnung läuft trotzdem.", false);
+        } else {
+          setStatus(`Calibrate läuft… (cols=${cols}, rows=${rows}, pitch=${pitchMm}mm)`);
+        }
+
+        if (kept < 12) throw new Error("Zu wenig gültige Punkte nach ID-Filter. Prüfe cols/rows und centroid IDs.");
+
+        // Do the calibration
+        const result = window.MathHelper.calibratePlanarFromPoints(
+          objPoints,
+          images.map(im => ({ points: im.points })),
+          {
+            distModel: "radial-tangential",
+            optimizeSkew: false,
+            maxIters: 25,
+            lambda0: 1e-3,
+            jacEps: 1e-6,
+            tol: 1e-6,
+            verbose: false
+          }
+        );
+
+        renderResult(result);
+        setStatus(`Fertig: RMS=${result.rms.toFixed(3)} px · Bilder=${images.length} · Punkte/Img≈${Math.round(kept/images.length)}`);
+      } catch (e) {
+        console.error(e);
+        els.summary.innerHTML = "";
+        els.out.textContent = "—";
+        lastResult = null;
+        els.btnDownload.disabled = true;
+        setStatus("Calibrate fehlgeschlagen: " + (e?.message || e), false);
+      }
+    });
+
+    // Download result JSON
+    els.btnDownload.addEventListener("click", () => {
+      if (!lastResult) return;
+      const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "calibration_result.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
