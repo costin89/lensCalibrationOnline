@@ -6,26 +6,36 @@
   <title>Variante B – Intrinsics aus Zentroid-JSON</title>
   <style>
     :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 18px; max-width: 1080px; }
-    h1 { margin: 0 0 10px; font-size: 18px; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; display:flex; justify-content:center; }
+    .wrap { width: min(1100px, 100%); }
+    h1 { margin: 0 0 10px; font-size: 20px; line-height: 1.25; }
+    h2 { margin: 0 0 10px; font-size: 16px; }
     .hint { font-size: 13px; opacity: 0.85; margin-bottom: 14px; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 10px; }
-    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 12px; padding: 12px; }
-    label { display: block; font-size: 12px; opacity: .9; margin-bottom: 4px; }
-    input[type="number"] { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; }
-    button { padding: 9px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.45); background: transparent; cursor: pointer; }
-    button.primary { border-color: rgba(80,140,255,.8); }
-    button:disabled { opacity: .55; cursor: not-allowed; }
-    .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .status { font-size: 13px; opacity: .9; }
-    pre { white-space: pre-wrap; word-break: break-word; background: rgba(127,127,127,.10); padding: 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.25); }
-    table { width:100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,.25); }
-    th { opacity: .9; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 14px; padding: 14px; background: rgba(127,127,127,.06); }
+    .card + .card { margin-top: 12px; }
+    .form-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; align-items:end; }
+    .field label { display:block; font-size: 12px; opacity: .9; margin-bottom: 6px; }
+    .field input[type="number"] { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.35); background: transparent; line-height: 1.1; }
+    .actions { margin-top: 12px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    button { padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.45); background: transparent; cursor:pointer; min-width: 150px; }
+    button.primary { border-color: rgba(80,140,255,.85); }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .status { font-size: 13px; opacity:.9; margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px dashed rgba(127,127,127,.35); background: rgba(127,127,127,.05); }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { white-space: pre-wrap; word-break: break-word; background: rgba(127,127,127,.10); padding: 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.25); margin: 0; }
+    .kpi { display:grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 10px 0 12px; }
+    .kpi .box { border: 1px solid rgba(127,127,127,.25); border-radius: 12px; padding: 10px 12px; background: rgba(127,127,127,.04); }
+    .kpi .box .t { font-size: 12px; opacity: .85; margin-bottom: 4px; }
+     .kpi .box .v { font-size: 14px; font-weight: 600; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,.25); vertical-align: top; }
+    th { opacity: .9; }
   </style>
 </head>
 <body>
+  <div class="wrap">
   <h1>Variante B: Target-Inputs → JSON importieren → Intrinsics berechnen</h1>
   <div class="hint">
     Diese Seite lädt <span class="mono">math_helper.js</span> (global <span class="mono">MathHelper</span>) und importiert
@@ -34,56 +44,51 @@
   </div>
 
   <div class="card">
-    <div class="grid">
-      <div>
+    <div class="form-grid">
+      <div class="field">
         <label for="cols">cols</label>
         <input id="cols" type="number" min="1" step="1" value="6" />
       </div>
-      <div>
+      <div class="field">
         <label for="rows">rows</label>
         <input id="rows" type="number" min="1" step="1" value="8" />
       </div>
-      <div>
+      <div class="field">
         <label for="pitchMm">pitchMm</label>
         <input id="pitchMm" type="number" min="0.001" step="0.1" value="20" />
       </div>
 
-      <div>
-        <label for="circleDiameterMm">circleDiameterMm</label>
-        <input id="circleDiameterMm" type="number" min="0" step="0.1" value="6" />
-      </div>
-
-      <div>
+      <div class="field">
         <label for="paperWmm">paperWmm</label>
         <input id="paperWmm" type="number" min="1" step="1" value="210" />
       </div>
-      <div>
+      <div class="field">
         <label for="paperHmm">paperHmm</label>
         <input id="paperHmm" type="number" min="1" step="1" value="297" />
       </div>
-      <div>
+      <div class="field">
         <label for="marginMm">marginMm</label>
         <input id="marginMm" type="number" min="0" step="0.1" value="10" />
       </div>
 
-      <div>
-        <label>Aktionen</label>
-        <div class="row">
-          <button id="btnImport" class="primary">JSON importieren</button>
-          <button id="btnCalibrate" class="primary" disabled>Calibrate</button>
-          <button id="btnDownload" disabled>Result JSON</button>
-        </div>
+      <div class="field">
+        <label for="circleDiameterMm">circleDiameterMm</label>
+        <input id="circleDiameterMm" type="number" min="0" step="0.1" value="6" />
       </div>
     </div>
 
-    <input id="fileInput" type="file" accept=".json,application/json" style="display:none" />
-    <div style="margin-top:10px" class="row">
-      <div class="status" id="status">Noch keine Datei importiert.</div>
+    <div class="actions">
+      <button id="btnImport" class="primary">JSON importieren</button>
+      <button id="btnCalibrate" class="primary" disabled>Calibrate</button>
+      <button id="btnDownload" disabled>Result JSON</button>
     </div>
+
+    <input id="fileInput" type="file" accept=".json,application/json" style="display:none" />
+    <div class="status" id="status">Noch keine Datei importiert.</div>
   </div>
 
-  <div class="card" style="margin-top:12px">
-    <h2 style="font-size:15px; margin:0 0 10px">Ergebnis</h2>
+  <div class="card">
+    <h2>Ergebnis</h2>
     <div id="summary"></div>
     <pre id="out" class="mono">—</pre>
   </div>
@@ -204,18 +209,29 @@
 
       // summary table
       els.summary.innerHTML = `
+        <div class="kpi">
+          <div class="box">
+            <div class="t">Focal Length</div>
+            <div class="v"><span class="mono">fx=${fmt(fx,4)}</span> px · <span class="mono">fy=${fmt(fy,4)}</span> px</div>
+          </div>
+          <div class="box">
+            <div class="t">Principal Point</div>
+            <div class="v"><span class="mono">cx=${fmt(cx,4)}</span> px · <span class="mono">cy=${fmt(cy,4)}</span> px</div>
+          </div>
+          <div class="box">
+            <div class="t">Reprojection Error</div>
+            <div class="v"><span class="mono">RMS=${fmt(result.rms,6)}</span> px</div>
+          </div>
+        </div>
+
         <table>
-          <tr><th>Parameter</th><th>Wert</th><th>Einheit</th></tr>
-          <tr><td>fx</td><td class="mono">${fmt(fx,4)}</td><td>px</td></tr>
-          <tr><td>fy</td><td class="mono">${fmt(fy,4)}</td><td>px</td></tr>
-          <tr><td>Principal Point (cx, cy)</td><td class="mono">(${fmt(cx,4)}, ${fmt(cy,4)})</td><td>px</td></tr>
-          <tr><td>Skew</td><td class="mono">${fmt(skew,6)}</td><td>px</td></tr>
-          <tr><td>k1</td><td class="mono">${fmt(k1,8)}</td><td>—</td></tr>
-          <tr><td>k2</td><td class="mono">${fmt(k2,8)}</td><td>—</td></tr>
-          <tr><td>p1</td><td class="mono">${fmt(p1,8)}</td><td>—</td></tr>
-          <tr><td>p2</td><td class="mono">${fmt(p2,8)}</td><td>—</td></tr>
-          <tr><td>k3</td><td class="mono">${fmt(k3,8)}</td><td>—</td></tr>
-          <tr><td>RMS reprojection</td><td class="mono">${fmt(result.rms,6)}</td><td>px</td></tr>
+          <tr><th>Distortion</th><th class="mono">Wert</th></tr>
+          <tr><td>k1</td><td class="mono">${fmt(k1,8)}</td></tr>
+          <tr><td>k2</td><td class="mono">${fmt(k2,8)}</td></tr>
+          <tr><td>p1</td><td class="mono">${fmt(p1,8)}</td></tr>
+          <tr><td>p2</td><td class="mono">${fmt(p2,8)}</td></tr>
+          <tr><td>k3</td><td class="mono">${fmt(k3,8)}</td></tr>
+          <tr><td>Skew</td><td class="mono">${fmt(skew,6)}</td></tr>
         </table>
       `;
 
@@ -337,5 +353,6 @@
       URL.revokeObjectURL(url);
     });
   </script>
+  </div>
 </body>
 </html>
