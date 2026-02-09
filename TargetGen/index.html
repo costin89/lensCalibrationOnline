@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Asymmetric Circles Grid Target Generator (Vanilla JS)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 16px; display: grid; gap: 12px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+    label { display: grid; gap: 4px; font-size: 12px; }
+    input, select, button { font: inherit; padding: 6px 8px; }
+    input[type="number"]{ width: 120px; }
+    .panel { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+    .previewWrap { display: grid; gap: 8px; }
+    canvas { width: min(100%, 1000px); height: auto; border: 1px solid #ddd; border-radius: 10px; background: #fff; }
+    .hint { color: #555; font-size: 12px; }
+    .warn { color: #8a4b00; font-size: 12px; }
+    .ok { color: #0a6; font-size: 12px; }
+    .spacer { flex: 1; }
+    code { background: #f7f7f7; padding: 1px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+  <div class="panel">
+    <div class="row">
+      <label>
+        Preset
+        <select id="preset">
+          <option value="A4" selected>A4 (210×297mm)</option>
+          <option value="A3">A3 (297×420mm)</option>
+          <option value="Custom">Custom</option>
+        </select>
+      </label>
+
+      <label>
+        Ausrichtung
+        <select id="orient">
+          <option value="portrait" selected>Hochkant</option>
+          <option value="landscape">Quer</option>
+        </select>
+      </label>
+
+      <label>
+        Papierbreite (mm)
+        <input id="paperW" type="number" min="10" step="0.1" value="210">
+      </label>
+
+      <label>
+        Papierhöhe (mm)
+        <input id="paperH" type="number" min="10" step="0.1" value="297">
+      </label>
+
+      <div class="spacer"></div>
+
+      <label>
+        Rows
+        <input id="rows" type="number" min="1" step="1" value="7">
+      </label>
+
+      <label>
+        Cols
+        <input id="cols" type="number" min="1" step="1" value="6">
+      </label>
+
+      <label>
+        Pitch d (mm)
+        <input id="pitch" type="number" min="0.1" step="0.1" value="12">
+      </label>
+
+      <label>
+        Kreis-Ø (mm)
+        <input id="diam" type="number" min="0.1" step="0.1" value="7">
+      </label>
+
+      <label>
+        Rand (mm)
+        <input id="margin" type="number" min="0" step="0.1" value="15">
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label>
+        PNG DPI
+        <input id="dpi" type="number" min="72" step="1" value="300">
+      </label>
+
+      <label>
+        Hintergrund
+        <select id="bg">
+          <option value="white" selected>Weiß</option>
+          <option value="transparent">Transparent (PNG)</option>
+        </select>
+      </label>
+
+      <label>
+        Crop Marks
+        <select id="crop">
+          <option value="off" selected>Aus</option>
+          <option value="on">An</option>
+        </select>
+      </label>
+
+      <label>
+        Orientierungsmarke
+        <select id="orientMark">
+          <option value="on" selected>An</option>
+          <option value="off">Aus</option>
+        </select>
+      </label>
+
+      <label>
+        IDs
+        <select id="ids">
+          <option value="all" selected>Alle</option>
+        </select>
+      </label>
+
+      <div class="spacer"></div>
+
+      <button id="btnUpdate">Update Preview</button>
+      <button id="btnPNG">Download PNG</button>
+      <button id="btnJSON">Download JSON</button>
+      <button id="btnPrint">Print</button>
+    </div>
+
+    <div id="status" class="hint" style="margin-top:8px;"></div>
+    <div class="hint">
+      Reihenfolge: <code>j=0..rows-1</code>, innerhalb <code>i=0..cols-1</code> (row-major).<br>
+      Pattern: <b>x = (2·i + (j mod 2))·d</b>, <b>y = j·d</b>
+    </div>
+  </div>
+
+  <div class="panel previewWrap">
+    <div class="hint">Preview (Canvas):</div>
+    <canvas id="preview" width="1200" height="900"></canvas>
+  </div>
+
+<script>
+(() => {
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const mmToPx = (mm, dpi) => mm * dpi / 25.4;
+  const $ = (id) => document.getElementById(id);
+
+  function downloadBlob(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function downloadText(filename, text, mime="application/octet-stream") {
+    downloadBlob(filename, new Blob([text], {type: mime}));
+  }
+
+  // UI
+  const preset  = $("preset");
+  const orient  = $("orient");
+  const paperW  = $("paperW");
+  const paperH  = $("paperH");
+  const rowsEl  = $("rows");
+  const colsEl  = $("cols");
+  const pitchEl = $("pitch");
+  const diamEl  = $("diam");
+  const marginEl= $("margin");
+  const dpiEl   = $("dpi");
+  const bgEl    = $("bg");
+  const cropEl  = $("crop");
+  const orientMarkEl = $("orientMark");
+  const idsEl   = $("ids");
+  const statusEl= $("status");
+
+  const canvas = $("preview");
+  const ctx = canvas.getContext("2d");
+
+  function applyPreset() {
+    let w = parseFloat(paperW.value);
+    let h = parseFloat(paperH.value);
+
+    if (preset.value === "A4") { w = 210; h = 297; }
+    if (preset.value === "A3") { w = 297; h = 420; }
+
+    const isLandscape = orient.value === "landscape";
+    paperW.value = isLandscape ? Math.max(w, h) : Math.min(w, h);
+    paperH.value = isLandscape ? Math.min(w, h) : Math.max(w, h);
+  }
+
+  // Grid points: row-major by j then i
+  function makeAsymGridPoints(cols, rows, d) {
+    const pts = [];
+    let k = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        pts.push({ index: k++, i, j, x: (2*i + (j & 1)) * d, y: j * d });
+      }
+    }
+    return pts;
+  }
+
+  function layoutOnPaper(pts, paperMmW, paperMmH, marginMm, circleRadiusMm) {
+    if (!pts.length) return { placed: [], fits: true, offsetX: 0, offsetY: 0 };
+
+    let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+
+    const bbox = {
+      minX: minX - circleRadiusMm,
+      minY: minY - circleRadiusMm,
+      maxX: maxX + circleRadiusMm,
+      maxY: maxY + circleRadiusMm
+    };
+
+    const patternW = bbox.maxX - bbox.minX;
+    const patternH = bbox.maxY - bbox.minY;
+    const availW = paperMmW - 2*marginMm;
+    const availH = paperMmH - 2*marginMm;
+    const fits = (patternW <= availW) && (patternH <= availH);
+
+    const offsetX = marginMm + (availW - patternW)/2 - bbox.minX;
+    const offsetY = marginMm + (availH - patternH)/2 - bbox.minY;
+
+    const placed = pts.map(p => ({ ...p, pageX: p.x + offsetX, pageY: p.y + offsetY }));
+    return { placed, fits, offsetX, offsetY, patternW, patternH, availW, availH };
+  }
+
+  function drawPreview(paperMmW, paperMmH, placed, rMm, cropMarks, orientMark, selectedIndex) {
+    const pad = 20;
+    const cw = canvas.width, ch = canvas.height;
+    const scale = Math.min((cw - 2*pad) / paperMmW, (ch - 2*pad) / paperMmH);
+    const ox = (cw - paperMmW * scale) / 2;
+    const oy = (ch - paperMmH * scale) / 2;
+
+    ctx.clearRect(0,0,cw,ch);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0,0,cw,ch);
+
+    // paper outline
+    ctx.strokeStyle = "#bbb";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ox, oy, paperMmW*scale, paperMmH*scale);
+
+    // crop marks (preview only)
+    if (cropMarks) {
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 1;
+      const L = 6, O = 3;
+      const line = (x1,y1,x2,y2) => {
+        ctx.beginPath();
+        ctx.moveTo(ox + x1*scale, oy + y1*scale);
+        ctx.lineTo(ox + x2*scale, oy + y2*scale);
+        ctx.stroke();
+      };
+      line(O,O,O+L,O); line(O,O,O,O+L);
+      line(paperMmW-O,O,paperMmW-O-L,O); line(paperMmW-O,O,paperMmW-O,O+L);
+      line(O,paperMmH-O,O+L,paperMmH-O); line(O,paperMmH-O,O,paperMmH-O-L);
+      line(paperMmW-O,paperMmH-O,paperMmW-O-L,paperMmH-O); line(paperMmW-O,paperMmH-O,paperMmW-O,paperMmH-O-L);
+    }
+
+
+    // orientation mark (5×5mm square, bottom-left)
+    if (orientMark) {
+      const S = 5;      // mm
+      const INSET = 3;  // mm from edges
+      const x = ox + INSET * scale;
+      const y = oy + (paperMmH - INSET - S) * scale;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.lineWidth = Math.max(1, 0.25 * scale);
+      ctx.strokeRect(x, y, S * scale, S * scale);
+    }
+
+    // circles
+    ctx.fillStyle = "#000";
+    for (const p of placed) {
+      const x = ox + p.pageX*scale;
+      const y = oy + p.pageY*scale;
+      const r = rMm*scale;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // highlight selected
+    if (Number.isFinite(selectedIndex)) {
+      const sp = placed.find(p => p.index === selectedIndex);
+      if (sp) {
+        const x = ox + sp.pageX*scale;
+        const y = oy + sp.pageY*scale;
+        const r = rMm*scale;
+        ctx.strokeStyle = "rgba(0,120,255,0.9)";
+        ctx.lineWidth = Math.max(2, r * 0.25);
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.25, 0, Math.PI*2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function buildJSON(cfg, placed) {
+    const nowIso = new Date().toISOString();
+    const points = placed.map(p => ({
+      index: p.index,
+      i: p.i,
+      j: p.j,
+      grid: { x: p.x, y: p.y },
+      page: { x: p.pageX, y: p.pageY }
+    }));
+    return {
+      meta: { type: "asymmetric_circles_grid", createdAt: nowIso },
+      settings: {
+        preset: preset.value,
+        orientation: orient.value,
+        paperMm: { width: cfg.paperMmW, height: cfg.paperMmH },
+        rows: cfg.rows,
+        cols: cfg.cols,
+        pitchMm: cfg.d,
+        circleDiameterMm: cfg.diamMm,
+        marginMm: cfg.marginMm,
+        cropMarks: cfg.cropMarks,
+        orientationMark: cfg.orientMark,
+        pngDpi: cfg.dpi,
+        background: cfg.background
+      },
+      points
+    };
+  }
+
+  function downloadPNG(cfg, placed, rMm) {
+    const wPx = Math.round(mmToPx(cfg.paperMmW, cfg.dpi));
+    const hPx = Math.round(mmToPx(cfg.paperMmH, cfg.dpi));
+
+    const c = document.createElement("canvas");
+    c.width = wPx; c.height = hPx;
+    const g = c.getContext("2d");
+
+    if (cfg.background === "white") {
+      g.fillStyle = "#fff";
+      g.fillRect(0,0,wPx,hPx);
+    } else {
+      g.clearRect(0,0,wPx,hPx);
+    }
+
+
+    // orientation mark (5×5mm square, bottom-left)
+    if (cfg.orientMark) {
+      const S = 5;      // mm
+      const INSET = 3;  // mm from edges
+      const x = mmToPx(INSET, cfg.dpi);
+      const y = mmToPx(cfg.paperMmH - INSET - S, cfg.dpi);
+      const w = mmToPx(S, cfg.dpi);
+      g.strokeStyle = "#000";
+      g.lineWidth = Math.max(1, mmToPx(0.25, cfg.dpi));
+      g.strokeRect(x, y, w, w);
+    }
+
+    g.fillStyle = "#000";
+    for (const p of placed) {
+      const x = mmToPx(p.pageX, cfg.dpi);
+      const y = mmToPx(p.pageY, cfg.dpi);
+      const r = mmToPx(rMm, cfg.dpi);
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI*2);
+      g.fill();
+    }
+
+    c.toBlob((blob) => {
+      downloadBlob(`asym_circles_${cfg.paperMmW}x${cfg.paperMmH}mm_${cfg.dpi}dpi.png`, blob);
+    }, "image/png");
+  }
+
+  function readCfg() {
+    const cfg = {
+      paperMmW: parseFloat(paperW.value),
+      paperMmH: parseFloat(paperH.value),
+      rows: parseInt(rowsEl.value, 10),
+      cols: parseInt(colsEl.value, 10),
+      d: parseFloat(pitchEl.value),
+      diamMm: parseFloat(diamEl.value),
+      marginMm: parseFloat(marginEl.value),
+      dpi: parseInt(dpiEl.value, 10),
+      background: bgEl.value,
+      cropMarks: cropEl.value === "on",
+      orientMark: orientMarkEl.value === "on"
+    };
+
+    cfg.paperMmW = clamp(cfg.paperMmW, 10, 2000);
+    cfg.paperMmH = clamp(cfg.paperMmH, 10, 2000);
+    cfg.rows = clamp(cfg.rows, 1, 500);
+    cfg.cols = clamp(cfg.cols, 1, 500);
+    cfg.d = clamp(cfg.d, 0.1, 500);
+    cfg.diamMm = clamp(cfg.diamMm, 0.1, 500);
+    cfg.marginMm = clamp(cfg.marginMm, 0, 500);
+    cfg.dpi = clamp(cfg.dpi, 72, 1200);
+    return cfg;
+  }
+
+  function repopulateIds(placed) {
+    const prev = idsEl.value;
+    idsEl.innerHTML = "";
+    const optAll = document.createElement("option");
+    optAll.value = "all";
+    optAll.textContent = "Alle";
+    idsEl.appendChild(optAll);
+
+    for (const p of placed) {
+      const opt = document.createElement("option");
+      opt.value = String(p.index);
+      opt.textContent = `#${p.index} (i=${p.i}, j=${p.j})`;
+      idsEl.appendChild(opt);
+    }
+
+    if (prev && [...idsEl.options].some(o => o.value === prev)) idsEl.value = prev;
+    else idsEl.value = "all";
+  }
+
+  function selectedIndex() {
+    if (idsEl.value === "all") return null;
+    const n = parseInt(idsEl.value, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  let last = null; // { cfg, placed, rMm }
+
+  function update() {
+    if (preset.value !== "Custom") applyPreset();
+
+    const cfg = readCfg();
+    const rMm = cfg.diamMm / 2;
+
+    const grid = makeAsymGridPoints(cfg.cols, cfg.rows, cfg.d);
+    const laid = layoutOnPaper(grid, cfg.paperMmW, cfg.paperMmH, cfg.marginMm, rMm);
+
+    repopulateIds(laid.placed);
+
+    const sel = selectedIndex();
+    const sp = Number.isFinite(sel) ? laid.placed.find(p => p.index === sel) : null;
+
+    const expected = cfg.rows * cfg.cols;
+    const drawn = laid.placed.length;
+
+    const fitsMsg = laid.fits
+      ? `<span class="ok">✓ Pattern passt in die Seite.</span>`
+      : `<span class="warn">⚠ Pattern ist größer als der verfügbare Bereich (Seite/Margin) → Parameter anpassen.</span>`;
+
+    let selMsg = "";
+    if (sp) {
+      selMsg =
+        `<br>Ausgewählt: <b>#${sp.index}</b> (i=${sp.i}, j=${sp.j})` +
+        ` | grid(mm)=(${sp.x.toFixed(2)}, ${sp.y.toFixed(2)})` +
+        ` | page(mm)=(${sp.pageX.toFixed(2)}, ${sp.pageY.toFixed(2)})`;
+    }
+
+    statusEl.innerHTML =
+      `${fitsMsg}<br>` +
+      `Seite: ${cfg.paperMmW}×${cfg.paperMmH}mm, Pattern: ${cfg.cols}×${cfg.rows} Punkte (erwartet ${expected})` +
+      `, d=${cfg.d}mm, Ø=${cfg.diamMm}mm, Rand=${cfg.marginMm}mm` +
+      `<br><b>Preview Punkte:</b> ${drawn}` +
+      selMsg;
+
+    drawPreview(cfg.paperMmW, cfg.paperMmH, laid.placed, rMm, cfg.cropMarks, cfg.orientMark, sel);
+
+    last = { cfg, placed: laid.placed, rMm };
+  }
+
+  // Events
+  preset.addEventListener("change", update);
+  orient.addEventListener("change", update);
+  idsEl.addEventListener("change", update);
+
+  for (const el of [paperW,paperH,rowsEl,colsEl,pitchEl,diamEl,marginEl,dpiEl,bgEl,cropEl,orientMarkEl]) {
+    el.addEventListener("input", update);
+    el.addEventListener("change", update);
+  }
+
+  $("btnUpdate").addEventListener("click", update);
+
+  $("btnPNG").addEventListener("click", () => {
+    if (!last) update();
+    downloadPNG(last.cfg, last.placed, last.rMm);
+  });
+
+  $("btnJSON").addEventListener("click", () => {
+    if (!last) update();
+    const cfg = last.cfg;
+    const obj = buildJSON(cfg, last.placed);
+    downloadText(
+      `asym_circles_${cfg.paperMmW}x${cfg.paperMmH}mm.json`,
+      JSON.stringify(obj, null, 2),
+      "application/json;charset=utf-8"
+    );
+  });
+
+  $("btnPrint").addEventListener("click", () => {
+    // Print uses the browser print dialog on current page preview; no SVG export.
+    window.print();
+  });
+
+  // init
+  applyPreset();
+  update();
+})();
+</script>
+</body>
+</html>
